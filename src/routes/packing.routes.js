@@ -10,6 +10,7 @@ const { authenticateToken } = require('../middlewares/auth.middleware');
  */
 router.post('/', authenticateToken, packingController.createPacking);
 
+router.get('/history', authenticateToken, packingController.getPackingHistory);
 
 // Anda bisa menambahkan rute lain terkait packing di sini nanti
 // Contoh: router.get('/', authenticateToken, packingController.getAllPacking);

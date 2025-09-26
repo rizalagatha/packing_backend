@@ -104,6 +104,29 @@ const createPacking = async (req, res) => {
   }
 };
 
+const getPackingHistory = async (req, res) => {
+  try {
+    const { kode: user_kode } = req.user;
+
+    const query = `
+      SELECT pack_nomor, pack_tanggal, pack_keterangan, 
+      (SELECT COUNT(*) FROM tpacking_dtl WHERE packd_pack_nomor = p.pack_nomor) as jumlah_item
+      FROM tpacking p 
+      WHERE p.pack_user_kode = ? 
+      ORDER BY p.created_at DESC 
+      LIMIT 5
+    `;
+
+    const [rows] = await pool.query(query, [user_kode]);
+
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    console.error('Gagal mengambil riwayat packing:', error);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server.' });
+  }
+};
+
 module.exports = {
   createPacking,
+  getPackingHistory,
 };
