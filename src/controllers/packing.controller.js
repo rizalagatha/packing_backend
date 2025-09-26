@@ -126,7 +126,35 @@ const getPackingHistory = async (req, res) => {
   }
 };
 
+const getPackingDetail = async (req, res) => {
+  try {
+    const { nomor } = req.params; // Ambil nomor packing dari URL
+
+    // Ambil data header
+    const [headerRows] = await pool.query('SELECT * FROM tpacking WHERE pack_nomor = ?', [nomor]);
+
+    if (headerRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Nomor packing tidak ditemukan.' });
+    }
+
+    // Ambil data item detail
+    const [itemRows] = await pool.query('SELECT * FROM tpacking_dtl WHERE packd_pack_nomor = ?', [nomor]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        header: headerRows[0],
+        items: itemRows,
+      },
+    });
+  } catch (error) {
+    console.error('Gagal mengambil detail packing:', error);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server.' });
+  }
+};
+
 module.exports = {
   createPacking,
   getPackingHistory,
+  getPackingDetail,
 };
