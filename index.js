@@ -36,6 +36,9 @@ app.use('/api/packing', packingRoutes);
 const produkRoutes = require('./src/routes/produk.routes.js');
 app.use('/api/produk', produkRoutes);
 
+const suratJalanRoutes = require('./src/routes/suratJalan.routes.js');
+app.use('/api/surat-jalan', suratJalanRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
