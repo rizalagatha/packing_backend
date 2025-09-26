@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const sjController = require('../controllers/suratJalan.controller');
-const { authenticateToken } = require('../middleware/auth.middleware');
+const { authenticateToken } = require('../middlewares/auth.middleware');
 
 // Menerapkan middleware otentikasi untuk semua rute di bawah ini
 router.use(authenticateToken);
