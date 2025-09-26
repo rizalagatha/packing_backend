@@ -11,6 +11,7 @@ router.post('/', sjController.saveData);
 
 // Rute untuk mengambil item dari nomor referensi
 router.get('/load-items', sjController.getItemsForLoad);
+router.get('/load-from-packing/:packNomor', sjController.getItemsFromPacking);
 
 // Rute-rute pencarian
 router.get('/search/stores', sjController.searchStores);

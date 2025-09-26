@@ -192,6 +192,43 @@ const searchTerimaRb = async (req, res) => {
     }
 };
 
+const getItemsFromPacking = async (req, res) => {
+    try {
+        const { packNomor } = req.params;
+        const { cabang: gudang } = req.user; // Ambil info gudang dari user KDC yang login
+
+        // Query untuk mengambil semua item dari tpacking_dtl
+        // dan menggabungkannya untuk mendapatkan detail lengkap
+        const query = `
+            SELECT
+                d.packd_barcode AS barcode,
+                b.brgd_kode AS kode,
+                TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
+                d.size AS ukuran,
+                d.packd_qty AS qty,
+                IFNULL((
+                    SELECT SUM(m.mst_stok_in - m.mst_stok_out) FROM tmasterstok m
+                    WHERE m.mst_aktif = 'Y' AND m.mst_cab = ? AND m.mst_brg_kode = b.brgd_kode AND m.mst_ukuran = d.size
+                ), 0) AS stok
+            FROM tpacking_dtl d
+            JOIN tbarangdc_dtl b ON d.packd_barcode = b.brgd_barcode
+            JOIN tbarangdc h ON b.brgd_kode = h.brg_kode
+            WHERE d.packd_pack_nomor = ?;
+        `;
+        
+        const [items] = await pool.query(query, [gudang, packNomor]);
+
+        if (items.length === 0) {
+            return res.status(404).json({ success: false, message: 'Nomor Packing tidak ditemukan atau tidak memiliki item.' });
+        }
+
+        res.status(200).json({ success: true, data: items });
+
+    } catch (error) {
+        console.error('Error in getItemsFromPacking:', error);
+        res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server.' });
+    }
+};
 
 module.exports = {
     saveData,
@@ -200,4 +237,5 @@ module.exports = {
     searchStores,
     searchPermintaan,
     searchTerimaRb,
+    getItemsFromPacking,
 };
