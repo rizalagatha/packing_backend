@@ -26,7 +26,9 @@ const searchPenerimaanSj = async (req, res) => {
                 LEFT(h.tj_nomor, 3) = ? 
                 AND r.rb_nomor IS NULL
                 AND (
-                    (SELECT SUM(sjd.sjd_jumlah) FROM tdc_sj_dtl sjd WHERE sjd.sjd_nomor = (SELECT sjh.sj_nomor FROM tdc_sj_hdr sjh WHERE sjh.sj_noterima = h.tj_nomor)) > 
+                    (SELECT SUM(sjd.sjd_jumlah) FROM tdc_sj_dtl sjd WHERE sjd.sjd_nomor = (
+                        SELECT sjh.sj_nomor FROM tdc_sj_hdr sjh WHERE sjh.sj_noterima = h.tj_nomor LIMIT 1
+                    )) > 
                     (SELECT SUM(tjd.tjd_jumlah) FROM ttrm_sj_dtl tjd WHERE tjd.tjd_nomor = h.tj_nomor)
                 )
             ORDER BY h.tj_tanggal DESC;
@@ -114,13 +116,11 @@ const saveRetur = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Retur berhasil disimpan dengan nomor ${rbNomor}.`,
-        data: { nomor: rbNomor },
-      });
+    res.status(201).json({
+      success: true,
+      message: `Retur berhasil disimpan dengan nomor ${rbNomor}.`,
+      data: { nomor: rbNomor },
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error in saveRetur:", error);
