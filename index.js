@@ -41,6 +41,9 @@ app.use("/api/surat-jalan", suratJalanRoutes);
 const terimaSjRoutes = require("./src/routes/terimaSj.routes.js");
 app.use("/api/terima-sj", terimaSjRoutes);
 
+const returAdminRoutes = require("./src/routes/returAdmin.routes.js");
+app.use("/api/retur-admin", returAdminRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
