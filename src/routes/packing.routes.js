@@ -1,0 +1,17 @@
+const express = require('express');
+const router = express.Router();
+const packingController = require('../controllers/packing.controller');
+const { authenticateToken } = require('../middlewares/auth.middleware');
+
+/**
+ * @route   POST /api/packing
+ * @desc    Membuat sesi packing baru
+ * @access  Private (butuh token)
+ */
+router.post('/', authenticateToken, packingController.createPacking);
+
+
+// Anda bisa menambahkan rute lain terkait packing di sini nanti
+// Contoh: router.get('/', authenticateToken, packingController.getAllPacking);
+
+module.exports = router;
