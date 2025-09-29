@@ -19,7 +19,7 @@ const searchPenerimaanSj = async (req, res) => {
             SELECT 
                 h.tj_nomor AS nomor, 
                 h.tj_tanggal AS tanggal,
-                (SELECT sj_nomor FROM tdc_sj_hdr WHERE sj_noterima = h.tj_nomor LIMIT 1) as no_sj
+                (SELECT sj_nomor FROM tdc_sj_hdr WHERE sj_noterima = h.tj_nomor LIMIT 1) as no_sj,
                 'Open' as status
             FROM ttrm_sj_hdr h
             LEFT JOIN trbdc_hdr r ON h.tj_nomor = r.rb_noterima
