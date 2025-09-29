@@ -54,20 +54,25 @@ const loadSelisihData = async (req, res) => {
     const nomorSj = sjRows[0].sj_nomor;
 
     const query = `
-            SELECT 
-                kirim.sjd_kode AS kode,
-                brg_dtl.brgd_barcode AS barcode,
-                TRIM(CONCAT(brg.brg_jeniskaos, " ", brg.brg_tipe, " ", brg.brg_lengan, " ", brg.brg_jeniskain, " ", brg.brg_warna)) AS nama,
-                kirim.sjd_ukuran AS ukuran,
-                kirim.sjd_jumlah AS jumlahKirim,
-                IFNULL(terima.tjd_jumlah, 0) AS jumlahTerima,
-                (kirim.sjd_jumlah - IFNULL(terima.tjd_jumlah, 0)) AS selisih
-            FROM tdc_sj_dtl kirim
-            LEFT JOIN ttrm_sj_dtl terima ON kirim.sjd_nomor = (SELECT sj_nomor FROM tdc_sj_hdr WHERE sj_noterima = terima.tjd_nomor) AND kirim.sjd_kode = terima.tjd_kode AND kirim.sjd_ukuran = terima.tjd_ukuran
-            LEFT JOIN tbarangdc brg ON kirim.sjd_kode = brg.brg_kode
-            LEFT JOIN tbarangdc_dtl brg_dtl ON kirim.sjd_kode = brg_dtl.brgd_kode AND kirim.sjd_ukuran = brg_dtl.brgd_ukuran
-            WHERE kirim.sjd_nomor = ? AND (kirim.sjd_jumlah - IFNULL(terima.tjd_jumlah, 0)) > 0;
-        `;
+    SELECT 
+        kirim.sjd_kode AS kode,
+        brg_dtl.brgd_barcode AS barcode,
+        -- >> PERBAIKAN DI SINI
+        IFNULL(
+            TRIM(CONCAT(brg.brg_jeniskaos, " ", brg.brg_tipe, " ", brg.brg_lengan, " ", brg.brg_jeniskain, " ", brg.brg_warna)),
+            '--- NAMA BARANG TIDAK DITEMUKAN ---'
+        ) AS nama,
+        -- >> AKHIR PERBAIKAN
+        kirim.sjd_ukuran AS ukuran,
+        kirim.sjd_jumlah AS jumlahKirim,
+        IFNULL(terima.tjd_jumlah, 0) AS jumlahTerima,
+        (kirim.sjd_jumlah - IFNULL(terima.tjd_jumlah, 0)) AS selisih
+    FROM tdc_sj_dtl kirim
+    LEFT JOIN ttrm_sj_dtl terima ON kirim.sjd_nomor = (SELECT sj_nomor FROM tdc_sj_hdr WHERE sj_noterima = terima.tjd_nomor LIMIT 1) AND kirim.sjd_kode = terima.tjd_kode AND kirim.sjd_ukuran = terima.tjd_ukuran
+    LEFT JOIN tbarangdc brg ON kirim.sjd_kode = brg.brg_kode
+    LEFT JOIN tbarangdc_dtl brg_dtl ON kirim.sjd_kode = brg_dtl.brgd_kode AND kirim.sjd_ukuran = brg_dtl.brgd_ukuran
+    WHERE kirim.sjd_nomor = ? AND (kirim.sjd_jumlah - IFNULL(terima.tjd_jumlah, 0)) > 0;
+`;
     const [items] = await pool.query(query, [nomorSj]);
     res.status(200).json({ success: true, data: items });
   } catch (error) {
