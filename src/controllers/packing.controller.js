@@ -5,25 +5,29 @@ const pool = require("../config/database");
  */
 const generatePackingNumber = async (connection) => {
   const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  const day = String(today.getDate()).padStart(2, "0");
-  const datePrefix = `PACK/${year}${month}${day}/`;
+  const year = String(today.getFullYear()).substring(2); // Ambil 2 digit tahun, misal: '25'
+  const month = String(today.getMonth() + 1).padStart(2, "0"); // Ambil 2 digit bulan, misal: '09'
+  const prefix = `PACK${year}${month}`; // Menjadi: PACK2509
 
-  // Cari nomor terakhir untuk hari ini
-  const [rows] = await connection.query(
-    "SELECT pack_nomor FROM tpacking WHERE pack_nomor LIKE ? ORDER BY pack_nomor DESC LIMIT 1",
-    [`${datePrefix}%`]
-  );
+  // Query untuk mencari nomor terakhir dengan prefix bulan dan tahun yang sama
+  const query = `
+    SELECT pack_nomor FROM tpacking 
+    WHERE pack_nomor LIKE ? 
+    ORDER BY pack_nomor DESC LIMIT 1
+  `;
+
+  const [rows] = await pool.query(query, [`${prefix}%`]);
 
   let nextSequence = 1;
   if (rows.length > 0) {
     const lastNumber = rows[0].pack_nomor;
-    const lastSequence = parseInt(lastNumber.split("/").pop(), 10);
+    // Ambil bagian angka (5 digit terakhir) dan ubah menjadi integer
+    const lastSequence = parseInt(lastNumber.substring(prefix.length), 10);
     nextSequence = lastSequence + 1;
   }
 
-  return `${datePrefix}${String(nextSequence).padStart(4, "0")}`;
+  // Gabungkan prefix dengan nomor urut 5 digit
+  return `${prefix}${String(nextSequence).padStart(5, "0")}`;
 };
 
 /**
