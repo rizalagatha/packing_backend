@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const spkController = require('../controllers/spk.controller');
-const { authenticateToken } = require('../middleware/auth.middleware');
+const { authenticateToken } = require('../middlewares/auth.middleware');
 
 router.get('/by-barcode/:barcode', authenticateToken, spkController.findSpkByBarcode);
 
