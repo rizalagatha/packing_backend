@@ -6,17 +6,15 @@ const pool = require('../config/database');
 const findByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
-    const { gudang } = req.query;
+    const { gudang, spk_nomor } = req.query; // -> Ambil spk_nomor dari query
 
     if (!gudang) {
-      return res.status(400).json({ success: false, message: 'Parameter query "gudang" diperlukan.' });
+      return res.status(400).json({ success: false, message: 'Parameter "gudang" diperlukan.' });
     }
 
-    // Query ini sama persis dengan yang Anda berikan
-    const query = `
+    let query = `
       SELECT
-        d.brgd_barcode AS barcode,
-        d.brgd_kode AS kode,
+        d.brgd_barcode AS barcode, d.brgd_kode AS kode,
         TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
         d.brgd_ukuran AS ukuran,
         IFNULL((
@@ -24,14 +22,29 @@ const findByBarcode = async (req, res) => {
           WHERE m.mst_aktif = 'Y' AND m.mst_cab = ? AND m.mst_brg_kode = d.brgd_kode AND m.mst_ukuran = d.brgd_ukuran
         ), 0) AS stok
       FROM tbarangdc_dtl d
-      INNER JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
-      WHERE h.brg_aktif = 0 AND d.brgd_barcode = ?;
+      LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
     `;
-    
-    const [rows] = await pool.query(query, [gudang, barcode]);
+    const params = [gudang];
+
+    // Jika spk_nomor dikirim, tambahkan validasi ke SPK
+    if (spk_nomor) {
+      query += `
+        JOIN tspk_dc spk ON d.brgd_kode = spk.spkd_kode
+        WHERE spk.spkd_nomor = ? AND d.brgd_barcode = ?
+      `;
+      params.push(spk_nomor, barcode);
+    } else {
+      query += ` WHERE h.brg_aktif = 0 AND d.brgd_barcode = ?`;
+      params.push(barcode);
+    }
+
+    const [rows] = await pool.query(query, params);
 
     if (rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Barcode tidak ditemukan atau barang tidak aktif.' });
+      let message = spk_nomor 
+        ? `Barcode tidak ditemukan di dalam SPK ${spk_nomor}.`
+        : 'Barcode tidak ditemukan atau barang tidak aktif.';
+      return res.status(404).json({ success: false, message: message });
     }
 
     res.status(200).json({ success: true, data: rows[0] });
