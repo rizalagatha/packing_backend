@@ -1,23 +1,28 @@
-const pool = require('../config/database');
+const pool = require("../config/database");
 
 const findSpkByBarcode = async (req, res) => {
-    try {
-        const { barcode } = req.params;
-        const query = `
-            SELECT DISTINCT spkd_nomor, spk_nama 
-            FROM tbarangdc_dtl b 
-            LEFT JOIN tspk_dc c ON b.brgd_kode = c.spkd_kode
-            LEFT JOIN tspk d ON c.spkd_nomor = d.spk_nomor
-            WHERE b.brgd_barcode = ?;
-        `;
-        const [rows] = await pool.query(query, [barcode]);
-        res.status(200).json({ success: true, data: { items: rows } });
-    } catch (error) {
-        console.error('Error in findSpkByBarcode:', error);
-        res.status(500).json({ success: false, message: 'Gagal mencari data SPK.' });
-    }
+  try {
+    const { barcode } = req.params;
+    const query = `
+    SELECT DISTINCT 
+        c.spkd_nomor, 
+        d.spk_nama,
+        d.spk_tanggal  -- -> TAMBAHKAN KOLOM TANGGAL
+    FROM tbarangdc_dtl b 
+    LEFT JOIN tspk_dc c ON b.brgd_kode = c.spkd_kode
+    LEFT JOIN tspk d ON c.spkd_nomor = d.spk_nomor
+    WHERE b.brgd_barcode = ?;
+`;
+    const [rows] = await pool.query(query, [barcode]);
+    res.status(200).json({ success: true, data: { items: rows } });
+  } catch (error) {
+    console.error("Error in findSpkByBarcode:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mencari data SPK." });
+  }
 };
 
 module.exports = {
-    findSpkByBarcode,
+  findSpkByBarcode,
 };
