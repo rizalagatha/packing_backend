@@ -44,6 +44,9 @@ app.use("/api/terima-sj", terimaSjRoutes);
 const returAdminRoutes = require("./src/routes/returAdmin.routes.js");
 app.use("/api/retur-admin", returAdminRoutes);
 
+const spkRoutes = require('./src/routes/spk.routes.js');
+app.use('/api/spk', spkRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {

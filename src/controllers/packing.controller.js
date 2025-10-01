@@ -1,4 +1,4 @@
-const pool = require('../config/database');
+const pool = require("../config/database");
 
 /**
  * Membuat nomor packing baru dengan format PACK/YYYYMMDD/XXXX
@@ -6,8 +6,8 @@ const pool = require('../config/database');
 const generatePackingNumber = async (connection) => {
   const today = new Date();
   const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, '0');
-  const day = String(today.getDate()).padStart(2, '0');
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
   const datePrefix = `PACK/${year}${month}${day}/`;
 
   // Cari nomor terakhir untuk hari ini
@@ -19,13 +19,12 @@ const generatePackingNumber = async (connection) => {
   let nextSequence = 1;
   if (rows.length > 0) {
     const lastNumber = rows[0].pack_nomor;
-    const lastSequence = parseInt(lastNumber.split('/').pop(), 10);
+    const lastSequence = parseInt(lastNumber.split("/").pop(), 10);
     nextSequence = lastSequence + 1;
   }
 
-  return `${datePrefix}${String(nextSequence).padStart(4, '0')}`;
+  return `${datePrefix}${String(nextSequence).padStart(4, "0")}`;
 };
-
 
 /**
  * Logika untuk membuat sesi packing baru
@@ -33,9 +32,9 @@ const generatePackingNumber = async (connection) => {
 const createPacking = async (req, res) => {
   // Ambil user_kode dari token yang sudah di-decode oleh middleware
   const { kode: user_kode } = req.user;
-  
+
   // Ambil data dari body request
-  const { keterangan, items } = req.body;
+  const { spk_nomor, items } = req.body;
 
   // Validasi input
   if (!items || !Array.isArray(items) || items.length === 0) {
@@ -58,22 +57,25 @@ const createPacking = async (req, res) => {
     const packingHeader = {
       pack_nomor,
       pack_tanggal,
-      pack_keterangan: keterangan || null,
+      pack_spk_nomor: spk_nomor,
       pack_user_kode: user_kode,
       pack_status: 1, // Langsung dianggap selesai
     };
-    await connection.query('INSERT INTO tpacking SET ?', packingHeader);
+    await connection.query(
+      "INSERT INTO tpacking (pack_nomor, pack_tanggal, pack_spk_nomor, pack_user_kode, pack_status, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
+      [pack_nomor, pack_tanggal, spk_nomor, user_kode, 1]
+    );
 
     // 3. Siapkan dan simpan data detail ke tpacking_dtl
-    const packingDetails = items.map(item => [
+    const packingDetails = items.map((item) => [
       pack_nomor,
       item.barcode,
       item.qty,
       item.brg_kaosan,
-      item.size
+      item.size,
     ]);
     await connection.query(
-      'INSERT INTO tpacking_dtl (packd_pack_nomor, packd_barcode, packd_qty, packd_brg_kaosan, size) VALUES ?',
+      "INSERT INTO tpacking_dtl (packd_pack_nomor, packd_barcode, packd_qty, packd_brg_kaosan, size) VALUES ?",
       [packingDetails]
     );
 
@@ -82,22 +84,20 @@ const createPacking = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Sesi packing berhasil disimpan!',
+      message: "Sesi packing berhasil disimpan!",
       data: {
         pack_nomor: pack_nomor,
       },
     });
-
   } catch (error) {
     // Jika ada error, batalkan semua perubahan
     if (connection) await connection.rollback(); // -> Batalkan Perubahan
-    
-    console.error('Gagal menyimpan data packing:', error);
+
+    console.error("Gagal menyimpan data packing:", error);
     res.status(500).json({
       success: false,
-      message: 'Terjadi kesalahan pada server.',
+      message: "Terjadi kesalahan pada server.",
     });
-
   } finally {
     // Selalu lepaskan koneksi setelah selesai
     if (connection) connection.release();
@@ -109,7 +109,7 @@ const getPackingHistory = async (req, res) => {
     const { kode: user_kode } = req.user;
 
     const query = `
-      SELECT pack_nomor, pack_tanggal, pack_keterangan, 
+      SELECT pack_nomor, pack_tanggal, pack_spk_nomor,
       (SELECT COUNT(*) FROM tpacking_dtl WHERE packd_pack_nomor = p.pack_nomor) as jumlah_item
       FROM tpacking p 
       WHERE p.pack_user_kode = ? 
@@ -121,8 +121,10 @@ const getPackingHistory = async (req, res) => {
 
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
-    console.error('Gagal mengambil riwayat packing:', error);
-    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server.' });
+    console.error("Gagal mengambil riwayat packing:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Terjadi kesalahan pada server." });
   }
 };
 
@@ -131,14 +133,22 @@ const getPackingDetail = async (req, res) => {
     const { nomor } = req.params; // Ambil nomor packing dari URL
 
     // Ambil data header
-    const [headerRows] = await pool.query('SELECT * FROM tpacking WHERE pack_nomor = ?', [nomor]);
+    const [headerRows] = await pool.query(
+      "SELECT pack_nomor, pack_tanggal, pack_spk_nomor, pack_user_kode FROM tpacking WHERE pack_nomor = ?",
+      [nomor]
+    );
 
     if (headerRows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Nomor packing tidak ditemukan.' });
+      return res
+        .status(404)
+        .json({ success: false, message: "Nomor packing tidak ditemukan." });
     }
 
     // Ambil data item detail
-    const [itemRows] = await pool.query('SELECT * FROM tpacking_dtl WHERE packd_pack_nomor = ?', [nomor]);
+    const [itemRows] = await pool.query(
+      "SELECT * FROM tpacking_dtl WHERE packd_pack_nomor = ?",
+      [nomor]
+    );
 
     res.status(200).json({
       success: true,
@@ -148,8 +158,10 @@ const getPackingDetail = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('Gagal mengambil detail packing:', error);
-    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server.' });
+    console.error("Gagal mengambil detail packing:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Terjadi kesalahan pada server." });
   }
 };
 
