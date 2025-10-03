@@ -29,7 +29,7 @@ const findByBarcode = async (req, res) => {
     // Jika spk_nomor dikirim, tambahkan validasi ke SPK
     if (spk_nomor) {
       query += `
-        JOIN kencanaprint.tspk_dc spk ON d.brgd_kode = spk.spkd_kode
+        JOIN tspk_dc spk ON d.brgd_kode = spk.spkd_kode
         WHERE spk.spkd_nomor = ? AND d.brgd_barcode = ?
       `;
       params.push(spk_nomor, barcode);

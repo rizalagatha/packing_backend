@@ -9,8 +9,8 @@ const findSpkByBarcode = async (req, res) => {
           d.spk_nama,
           d.spk_tanggal 
         FROM tbarangdc_dtl b 
-      LEFT JOIN kencanaprint.tspk_dc c ON b.brgd_kode = c.spkd_kode
-      LEFT JOIN kencanaprint.tspk d ON c.spkd_nomor = d.spk_nomor
+      LEFT JOIN tspk_dc c ON b.brgd_kode = c.spkd_kode
+      LEFT JOIN tspk d ON c.spkd_nomor = d.spk_nomor
         WHERE b.brgd_barcode = ?
           AND d.spk_aktif = 'Y'
           AND d.spk_close = 0;
