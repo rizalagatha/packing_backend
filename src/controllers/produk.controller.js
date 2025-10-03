@@ -6,7 +6,7 @@ const pool = require('../config/database');
 const findByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
-    const { gudang, spk_nomor } = req.query; // -> Ambil spk_nomor dari query
+    const { gudang, spk_nomor } = req.query;
 
     if (!gudang) {
       return res.status(400).json({ success: false, message: 'Parameter "gudang" diperlukan.' });
@@ -29,7 +29,7 @@ const findByBarcode = async (req, res) => {
     // Jika spk_nomor dikirim, tambahkan validasi ke SPK
     if (spk_nomor) {
       query += `
-        JOIN tspk_dc spk ON d.brgd_kode = spk.spkd_kode
+        JOIN kencanaprint.tspk_dc spk ON d.brgd_kode = spk.spkd_kode
         WHERE spk.spkd_nomor = ? AND d.brgd_barcode = ?
       `;
       params.push(spk_nomor, barcode);
