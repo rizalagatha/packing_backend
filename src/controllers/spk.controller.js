@@ -4,16 +4,14 @@ const findSpkByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
     const query = `
-      SELECT DISTINCT 
-          c.spkd_nomor, 
-          d.spk_nama,
-          d.spk_tanggal 
+        SELECT DISTINCT 
+            c.spkd_nomor, 
+            d.spk_nama,
+            d.spk_tanggal 
         FROM tbarangdc_dtl b 
-      LEFT JOIN tspk_dc c ON b.brgd_kode = c.spkd_kode
-      LEFT JOIN tspk d ON c.spkd_nomor = d.spk_nomor
-        WHERE b.brgd_barcode = ?
-          AND d.spk_aktif = 'Y'
-          AND d.spk_close = 0;
+          LEFT JOIN tspk_dc c ON b.brgd_kode = c.spkd_kode
+          LEFT JOIN tspk d ON c.spkd_nomor = d.spk_nomor
+        WHERE b.brgd_barcode = ?;
     `;
     const [rows] = await pool.query(query, [barcode]);
     res.status(200).json({ success: true, data: { items: rows } });
