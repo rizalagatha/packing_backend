@@ -287,6 +287,40 @@ const getItemsFromPacking = async (req, res) => {
   }
 };
 
+const getSuratJalanHistory = async (req, res) => {
+    try {
+        const { cabang: userCabang } = req.user;
+        const { startDate, endDate } = req.query; // Menerima filter tanggal
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ success: false, message: 'Filter tanggal (startDate dan endDate) diperlukan.' });
+        }
+
+        const query = `
+            SELECT 
+                h.sj_nomor AS nomor,
+                h.sj_tanggal AS tanggal,
+                h.sj_kecab AS store_kode,
+                g.gdg_nama AS store_nama,
+                (SELECT COUNT(*) FROM tdc_sj_dtl d WHERE d.sjd_nomor = h.sj_nomor) AS jumlah_jenis_item,
+                (SELECT SUM(d.sjd_jumlah) FROM tdc_sj_dtl d WHERE d.sjd_nomor = h.sj_nomor) AS total_qty
+            FROM tdc_sj_hdr h
+            LEFT JOIN tgudang g ON h.sj_kecab = g.gdg_kode
+            WHERE 
+                LEFT(h.sj_nomor, 3) = ? 
+                AND h.sj_tanggal BETWEEN ? AND ?
+            ORDER BY h.sj_tanggal DESC, h.sj_nomor DESC;
+        `;
+        
+        const [rows] = await pool.query(query, [userCabang, startDate, endDate]);
+        res.status(200).json({ success: true, data: rows });
+
+    } catch (error) {
+        console.error('Error in getSuratJalanHistory:', error);
+        res.status(500).json({ success: false, message: 'Gagal mengambil riwayat Surat Jalan.' });
+    }
+};
+
 module.exports = {
   saveData,
   getItemsForLoad,
@@ -295,4 +329,5 @@ module.exports = {
   searchPermintaan,
   searchTerimaRb,
   getItemsFromPacking,
+  getSuratJalanHistory,
 };

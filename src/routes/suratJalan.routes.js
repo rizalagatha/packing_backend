@@ -18,6 +18,8 @@ router.get('/search/stores', sjController.searchStores);
 router.get('/search/permintaan', sjController.searchPermintaan);
 router.get('/search/terima-rb', sjController.searchTerimaRb);
 
+router.get('/history', sjController.getSuratJalanHistory);
+
 // (Kita sudah punya endpoint findByBarcode di produk.routes.js, jadi tidak perlu dibuat lagi)
 
 module.exports = router;

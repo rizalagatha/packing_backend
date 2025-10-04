@@ -1,5 +1,6 @@
 const pool = require("../config/database");
 const { format } = require("date-fns");
+const whatsappService = require("../services/whatsapp.service");
 
 // --- Helper Function ---
 const generateNewTjNumber = async (gudang, tanggal) => {
@@ -9,6 +10,14 @@ const generateNewTjNumber = async (gudang, tanggal) => {
   const [rows] = await pool.query(query, [`${prefix}%`]);
   const nextNumber = rows[0].next_num.toString().padStart(4, "0");
   return `${prefix}${nextNumber}`;
+};
+
+const generateNewPendingNumber = async (storeCode, tanggal) => {
+  const date = new Date(tanggal);
+  const prefix = `${storeCode}.PD.${format(date, "yyMM")}.`;
+  const query = `SELECT IFNULL(MAX(RIGHT(pending_nomor, 4)), 0) + 1 AS next_num FROM tpendingsj WHERE pending_nomor LIKE ?;`;
+  const [rows] = await pool.query(query, [`${prefix}%`]);
+  return `${prefix}${rows[0].next_num.toString().padStart(4, "0")}`;
 };
 
 // --- Controller Functions ---
@@ -65,9 +74,15 @@ const saveData = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    if (items.some((item) => item.jumlahTerima > item.jumlahKirim)) {
-      throw new Error("Jumlah terima tidak boleh melebihi jumlah kirim.");
+    // Validasi utama: pastikan tidak ada selisih, karena ini untuk simpan final
+    const totalKirim = items.reduce((sum, item) => sum + item.jumlahKirim, 0);
+    const totalTerima = items.reduce((sum, item) => sum + item.jumlahTerima, 0);
+    if (totalKirim !== totalTerima) {
+      throw new Error("Gagal simpan final. Masih terdapat selisih barang.");
     }
+
+    // --- Logika penyimpanan ke ttrm_sj_hdr dan ttrm_sj_dtl ---
+    // (Kode ini sama persis seperti bagian atas di kode lama Anda)
 
     const tjNomor = await generateNewTjNumber(
       user.cabang,
@@ -108,20 +123,131 @@ const saveData = async (req, res) => {
       [tjNomor, header.nomorSj]
     );
 
+    if (header.nomorPending) {
+      await connection.query(
+        'UPDATE tpendingsj SET status = "CLOSE" WHERE pending_nomor = ?',
+        [header.nomorPending]
+      );
+    }
+
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Penerimaan SJ berhasil disimpan dengan nomor ${tjNomor}.`,
-        data: { nomor: tjNomor },
-      });
+    res.status(201).json({
+      success: true,
+      message: `Penerimaan SJ berhasil disimpan dengan nomor ${tjNomor}.`,
+      data: { nomor: tjNomor },
+    });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Error in saveData:", error);
+    console.error("Error in saveData (Final):", error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     if (connection) connection.release();
+  }
+};
+
+const savePending = async (req, res) => {
+  const { header, items } = req.body;
+  const user = req.user;
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const pendingNomor = await generateNewPendingNumber(
+      user.cabang,
+      header.tanggalTerima
+    );
+
+    const pendingData = {
+      pending_nomor: pendingNomor,
+      sj_nomor: header.nomorSj,
+      kode_store: user.cabang,
+      user_create: user.kode,
+      tanggal_pending: header.tanggalTerima,
+      items_json: JSON.stringify(items), // Simpan seluruh item sebagai JSON string
+    };
+
+    await connection.query("INSERT INTO tpendingsj SET ?", pendingData);
+    await connection.commit();
+
+    // Kirim notifikasi WhatsApp setelah berhasil menyimpan
+    const itemsWithSelisih = items.filter(
+      (item) => item.jumlahKirim - item.jumlahTerima > 0
+    );
+    let waMessage = `*Notifikasi Penerimaan Pending*\n\nNomor Pending: *${pendingNomor}*\nNo. SJ: *${header.nomorSj}*\nStore: *${user.cabang}*\n\nTerdapat selisih barang yang perlu diproses:\n`;
+    itemsWithSelisih.forEach((item) => {
+      waMessage += `- ${item.nama} (${item.ukuran}): Selisih *${
+        item.jumlahKirim - item.jumlahTerima
+      }* pcs\n`;
+    });
+    await whatsappService.sendMessageToStore(user.cabang, waMessage);
+
+    res.status(201).json({
+      success: true,
+      message: `Penerimaan berhasil disimpan sebagai PENDING dengan nomor ${pendingNomor}.`,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error in savePending:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal menyimpan data pending." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+const searchPendingSj = async (req, res) => {
+  try {
+    const user = req.user;
+    const query = `
+            SELECT pending_nomor AS nomor, sj_nomor, tanggal_pending AS tanggal 
+            FROM tpendingsj 
+            WHERE kode_store = ? AND status = 'OPEN';
+        `;
+    const [rows] = await pool.query(query, [user.cabang]);
+    res.status(200).json({ success: true, data: { items: rows } });
+  } catch (error) {
+    console.error("Error in searchPendingSj:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mencari data pending." });
+  }
+};
+
+const loadPendingSj = async (req, res) => {
+  try {
+    const { pendingNomor } = req.params;
+    const [rows] = await pool.query(
+      "SELECT * FROM tpendingsj WHERE pending_nomor = ?",
+      [pendingNomor]
+    );
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Data pending tidak ditemukan." });
+    }
+
+    const pendingData = rows[0];
+    // Muat juga data header SJ asli untuk kelengkapan info
+    const [sjHeaderRows] = await pool.query(
+      `SELECT h.sj_nomor, h.sj_tanggal, h.sj_mt_nomor, h.sj_ket AS keterangan, LEFT(h.sj_nomor, 3) AS gudang_asal_kode, g_asal.gdg_nama AS gudang_asal_nama FROM tdc_sj_hdr h LEFT JOIN tgudang g_asal ON g_asal.gdg_kode = LEFT(h.sj_nomor, 3) WHERE h.sj_nomor = ?;`,
+      [pendingData.sj_nomor]
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        header: sjHeaderRows[0],
+        items: JSON.parse(pendingData.items_json), // Kembalikan item dari JSON
+        pendingNomor: pendingData.pending_nomor,
+      },
+    });
+  } catch (error) {
+    console.error("Error in loadPendingSj:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal memuat data pending." });
   }
 };
 
@@ -129,4 +255,7 @@ module.exports = {
   searchSj,
   loadInitialData,
   saveData,
+  savePending,
+  searchPendingSj,
+  loadPendingSj,
 };

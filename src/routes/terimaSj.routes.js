@@ -14,5 +14,9 @@ router.get("/load-sj/:nomorSj", terimaSjController.loadInitialData);
 
 // Rute untuk menyimpan data penerimaan
 router.post("/", terimaSjController.saveData);
+router.post('/pending', terimaSjController.savePending);
+
+router.get('/pending/search', terimaSjController.searchPendingSj);
+router.get('/pending/load/:pendingNomor', terimaSjController.loadPendingSj);
 
 module.exports = router;

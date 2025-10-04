@@ -2,6 +2,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const whatsappService = require('./src/services/whatsapp.service');
 
 // 2. Inisialisasi koneksi database
 // Cukup dengan memanggil file ini, koneksi akan dibuat dan diuji
@@ -46,6 +47,11 @@ app.use("/api/retur-admin", returAdminRoutes);
 
 const spkRoutes = require('./src/routes/spk.routes.js');
 app.use('/api/spk', spkRoutes);
+
+const whatsappRoutes = require('./src/routes/whatsapp.routes.js');
+app.use('/api/whatsapp', whatsappRoutes);
+
+whatsappService.initialize();
 
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3001;
