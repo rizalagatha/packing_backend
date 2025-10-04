@@ -5,7 +5,7 @@ const { authenticateToken } = require("../middlewares/auth.middleware");
 
 router.use(authenticateToken);
 
-router.get("/search-penerimaan", returController.searchPenerimaanSj);
+router.get("/search-penerimaan", returController.searchPendingRetur);
 router.get("/load-selisih/:tjNomor", returController.loadSelisihData);
 router.post("/", returController.saveRetur);
 

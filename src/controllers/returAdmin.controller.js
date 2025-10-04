@@ -12,77 +12,82 @@ const generateNewRbNumber = async (gudang, tanggal) => {
 
 // --- Controller Functions ---
 
-const searchPenerimaanSj = async (req, res) => {
+/**
+ * Mencari data dari tabel tampungan selisih yang statusnya masih OPEN.
+ */
+const searchPendingRetur = async (req, res) => {
   try {
     const user = req.user;
     const query = `
             SELECT 
-                h.tj_nomor AS nomor, 
-                h.tj_tanggal AS tanggal,
-                (SELECT sj_nomor FROM tdc_sj_hdr WHERE sj_noterima = h.tj_nomor LIMIT 1) as no_sj,
-                'Open' as status
-            FROM ttrm_sj_hdr h
-            LEFT JOIN trbdc_hdr r ON h.tj_nomor = r.rb_noterima
+                pending_nomor AS nomor, 
+                sj_nomor,
+                tanggal_pending AS tanggal
+            FROM tpendingsj 
             WHERE 
-                LEFT(h.tj_nomor, 3) = ? 
-                AND r.rb_nomor IS NULL
-                AND (
-                    (SELECT SUM(sjd.sjd_jumlah) FROM tdc_sj_dtl sjd WHERE sjd.sjd_nomor = (
-                        SELECT sjh.sj_nomor FROM tdc_sj_hdr sjh WHERE sjh.sj_noterima = h.tj_nomor LIMIT 1
-                    )) > 
-                    (SELECT SUM(tjd.tjd_jumlah) FROM ttrm_sj_dtl tjd WHERE tjd.tjd_nomor = h.tj_nomor)
-                )
-            ORDER BY h.tj_tanggal DESC;
+                kode_store = ? 
+                AND status = 'OPEN'
+            ORDER BY tanggal_pending DESC;
         `;
     const [rows] = await pool.query(query, [user.cabang]);
     res.status(200).json({ success: true, data: { items: rows } });
   } catch (error) {
-    console.error("Error in searchPenerimaanSj:", error);
+    console.error("Error in searchPendingRetur:", error);
     res
       .status(500)
-      .json({ success: false, message: "Gagal mencari data penerimaan." });
+      .json({ success: false, message: "Gagal mencari data pending retur." });
   }
 };
 
+/**
+ * Memuat item yang selisih dari sebuah nomor pending.
+ */
 const loadSelisihData = async (req, res) => {
   try {
-    const { tjNomor } = req.params;
-    const noSjQuery = `SELECT sj_nomor FROM tdc_sj_hdr WHERE sj_noterima = ?`;
-    const [sjRows] = await pool.query(noSjQuery, [tjNomor]);
-    if (sjRows.length === 0)
-      throw new Error("Surat Jalan terkait tidak ditemukan.");
-    const nomorSj = sjRows[0].sj_nomor;
+    const { pendingNomor } = req.params;
+    const [rows] = await pool.query(
+      "SELECT items_json, sj_nomor FROM tpendingsj WHERE pending_nomor = ?",
+      [pendingNomor]
+    );
 
-    const query = `
-    SELECT 
-        kirim.sjd_kode AS kode,
-        brg_dtl.brgd_barcode AS barcode,
-        -- >> PERBAIKAN DI SINI
-        IFNULL(
-            TRIM(CONCAT(brg.brg_jeniskaos, " ", brg.brg_tipe, " ", brg.brg_lengan, " ", brg.brg_jeniskain, " ", brg.brg_warna)),
-            '--- NAMA BARANG TIDAK DITEMUKAN ---'
-        ) AS nama,
-        -- >> AKHIR PERBAIKAN
-        kirim.sjd_ukuran AS ukuran,
-        kirim.sjd_jumlah AS jumlahKirim,
-        IFNULL(terima.tjd_jumlah, 0) AS jumlahTerima,
-        (kirim.sjd_jumlah - IFNULL(terima.tjd_jumlah, 0)) AS selisih
-    FROM tdc_sj_dtl kirim
-    LEFT JOIN ttrm_sj_dtl terima ON kirim.sjd_nomor = (SELECT sj_nomor FROM tdc_sj_hdr WHERE sj_noterima = terima.tjd_nomor LIMIT 1) AND kirim.sjd_kode = terima.tjd_kode AND kirim.sjd_ukuran = terima.tjd_ukuran
-    LEFT JOIN tbarangdc brg ON kirim.sjd_kode = brg.brg_kode
-    LEFT JOIN tbarangdc_dtl brg_dtl ON kirim.sjd_kode = brg_dtl.brgd_kode AND kirim.sjd_ukuran = brg_dtl.brgd_ukuran
-    WHERE kirim.sjd_nomor = ? AND (kirim.sjd_jumlah - IFNULL(terima.tjd_jumlah, 0)) > 0;
-`;
-    const [items] = await pool.query(query, [nomorSj]);
-    res.status(200).json({ success: true, data: items });
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Data pending tidak ditemukan." });
+    }
+
+    const allItems = JSON.parse(rows[0].items_json);
+    const selisihItems = allItems
+      .filter((item) => item.jumlahKirim - item.jumlahTerima > 0)
+      .map((item) => ({
+        ...item,
+        selisih: item.jumlahKirim - item.jumlahTerima,
+      }));
+
+    // Ambil data header SJ asli untuk kelengkapan info
+    const [sjHeaderRows] = await pool.query(
+      "SELECT * FROM tdc_sj_hdr WHERE sj_nomor = ?",
+      [rows[0].sj_nomor]
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        headerSj: sjHeaderRows[0],
+        items: selisihItems,
+      },
+    });
   } catch (error) {
-    console.error("Error in loadSelisihData:", error);
+    console.error("Error in loadSelisihData (Retur):", error);
     res
       .status(500)
       .json({ success: false, message: "Gagal memuat data selisih." });
   }
 };
 
+/**
+ * Menyimpan data retur dan menutup status pending.
+ */
 const saveRetur = async (req, res) => {
   const { header, items } = req.body;
   const user = req.user;
@@ -111,6 +116,7 @@ const saveRetur = async (req, res) => {
     const detailValues = items.map((item, index) => {
       const nourut = index + 1;
       const iddrec = `${idrec}${nourut}`;
+      // Simpan jumlah selisih ke kolom rbd_jumlah
       return [idrec, iddrec, rbNomor, item.kode, item.ukuran, item.selisih, 0];
     });
 
@@ -121,12 +127,20 @@ const saveRetur = async (req, res) => {
       );
     }
 
+    // --- UPDATE STATUS PENDING MENJADI CLOSE ---
+    await connection.query(
+      `UPDATE tpendingsj SET status = 'CLOSE' WHERE pending_nomor = ?`,
+      [header.nomorPenerimaan]
+    );
+
     await connection.commit();
-    res.status(201).json({
-      success: true,
-      message: `Retur berhasil disimpan dengan nomor ${rbNomor}.`,
-      data: { nomor: rbNomor },
-    });
+    res
+      .status(201)
+      .json({
+        success: true,
+        message: `Retur berhasil disimpan dengan nomor ${rbNomor}.`,
+        data: { nomor: rbNomor },
+      });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error in saveRetur:", error);
@@ -137,7 +151,7 @@ const saveRetur = async (req, res) => {
 };
 
 module.exports = {
-  searchPenerimaanSj,
+  searchPendingRetur,
   loadSelisihData,
   saveRetur,
 };
