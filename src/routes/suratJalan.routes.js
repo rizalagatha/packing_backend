@@ -9,6 +9,8 @@ router.use(authenticateToken);
 // Rute utama untuk menyimpan data
 router.post('/', sjController.saveData);
 
+router.get('/:nomor', sjController.loadForEdit);
+
 // Rute untuk mengambil item dari nomor referensi
 router.get('/load-items', sjController.getItemsForLoad);
 router.get('/load-from-packing/:packNomor', sjController.getItemsFromPacking);
@@ -19,7 +21,5 @@ router.get('/search/permintaan', sjController.searchPermintaan);
 router.get('/search/terima-rb', sjController.searchTerimaRb);
 
 router.get('/history', sjController.getSuratJalanHistory);
-
-// (Kita sudah punya endpoint findByBarcode di produk.routes.js, jadi tidak perlu dibuat lagi)
 
 module.exports = router;

@@ -180,6 +180,7 @@ const savePending = async (req, res) => {
         item.jumlahKirim - item.jumlahTerima
       }* pcs\n`;
     });
+
     await whatsappService.sendMessageToStore(user.cabang, waMessage);
 
     res.status(201).json({
