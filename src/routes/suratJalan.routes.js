@@ -3,23 +3,19 @@ const router = express.Router();
 const sjController = require('../controllers/suratJalan.controller');
 const { authenticateToken } = require('../middlewares/auth.middleware');
 
-// Menerapkan middleware otentikasi untuk semua rute di bawah ini
 router.use(authenticateToken);
 
-// Rute utama untuk menyimpan data
-router.post('/', sjController.saveData);
+// --- URUTAN DIPERBAIKI DI SINI ---
 
-router.get('/:nomor', sjController.loadForEdit);
-
-// Rute untuk mengambil item dari nomor referensi
+// Rute-rute spesifik harus didefinisikan terlebih dahulu
+router.get('/history', sjController.getSuratJalanHistory);
 router.get('/load-items', sjController.getItemsForLoad);
-router.get('/load-from-packing/:packNomor', sjController.getItemsFromPacking);
-
-// Rute-rute pencarian
 router.get('/search/stores', sjController.searchStores);
 router.get('/search/permintaan', sjController.searchPermintaan);
 router.get('/search/terima-rb', sjController.searchTerimaRb);
 
-router.get('/history', sjController.getSuratJalanHistory);
+// Baru setelah itu rute dinamis/umum
+router.get('/:nomor', sjController.loadForEdit); // Muat data SJ untuk diubah
+router.post('/', sjController.saveData); // Simpan SJ baru atau perubahan
 
 module.exports = router;

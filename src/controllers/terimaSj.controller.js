@@ -74,13 +74,6 @@ const saveData = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    // Validasi utama: pastikan tidak ada selisih, karena ini untuk simpan final
-    const totalKirim = items.reduce((sum, item) => sum + item.jumlahKirim, 0);
-    const totalTerima = items.reduce((sum, item) => sum + item.jumlahTerima, 0);
-    if (totalKirim !== totalTerima) {
-      throw new Error("Gagal simpan final. Masih terdapat selisih barang.");
-    }
-
     // --- Logika penyimpanan ke ttrm_sj_hdr dan ttrm_sj_dtl ---
     // (Kode ini sama persis seperti bagian atas di kode lama Anda)
 
@@ -146,47 +139,73 @@ const saveData = async (req, res) => {
 };
 
 const savePending = async (req, res) => {
-  const { header, items } = req.body;
+  const { header, items, pending_nomor } = req.body; // Ambil pending_nomor
   const user = req.user;
   let connection;
+
   try {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    const pendingNomor = await generateNewPendingNumber(
-      user.cabang,
-      header.tanggalTerima
-    );
+    if (pending_nomor) {
+      // --- LOGIKA UPDATE PENDING YANG SUDAH ADA ---
+      await connection.query(
+        `UPDATE tpendingsj SET items_json = ?, tanggal_pending = ? WHERE pending_nomor = ? AND kode_store = ?`,
+        [
+          JSON.stringify(items),
+          header.tanggalTerima,
+          pending_nomor,
+          user.cabang,
+        ]
+      );
 
-    const pendingData = {
-      pending_nomor: pendingNomor,
-      sj_nomor: header.nomorSj,
-      kode_store: user.cabang,
-      user_create: user.kode,
-      tanggal_pending: header.tanggalTerima,
-      items_json: JSON.stringify(items), // Simpan seluruh item sebagai JSON string
-    };
+      await connection.commit();
+      res
+        .status(200)
+        .json({
+          success: true,
+          message: `Pending ${pending_nomor} berhasil diperbarui.`,
+        });
+    } else {
+      // --- LOGIKA MEMBUAT PENDING BARU ---
+      const newPendingNomor = await generateNewPendingNumber(
+        user.cabang,
+        header.tanggalTerima
+      );
 
-    await connection.query("INSERT INTO tpendingsj SET ?", pendingData);
-    await connection.commit();
+      const pendingData = {
+        pending_nomor: newPendingNomor,
+        sj_nomor: header.nomorSj,
+        kode_store: user.cabang,
+        user_create: user.kode,
+        tanggal_pending: header.tanggalTerima,
+        items_json: JSON.stringify(items), // Simpan seluruh item sebagai JSON string
+      };
 
-    // Kirim notifikasi WhatsApp setelah berhasil menyimpan
-    const itemsWithSelisih = items.filter(
-      (item) => item.jumlahKirim - item.jumlahTerima > 0
-    );
-    let waMessage = `*Notifikasi Penerimaan Pending*\n\nNomor Pending: *${pendingNomor}*\nNo. SJ: *${header.nomorSj}*\nStore: *${user.cabang}*\n\nTerdapat selisih barang yang perlu diproses:\n`;
-    itemsWithSelisih.forEach((item) => {
-      waMessage += `- ${item.nama} (${item.ukuran}): Selisih *${
-        item.jumlahKirim - item.jumlahTerima
-      }* pcs\n`;
-    });
+      await connection.query("INSERT INTO tpendingsj SET ?", pendingData);
+      await connection.commit();
 
-    await whatsappService.sendMessageToStore(user.cabang, waMessage);
+      // Kirim notifikasi WhatsApp hanya saat membuat pending baru
+      const itemsWithSelisih = items.filter(
+        (item) => item.jumlahKirim - item.jumlahTerima > 0
+      );
+      if (itemsWithSelisih.length > 0) {
+        let waMessage = `*Notifikasi Penerimaan Pending*\n\nNomor Pending: *${newPendingNomor}*\nNo. SJ: *${header.nomorSj}*\nStore: *${user.cabang}*\n\nTerdapat selisih barang yang perlu diproses:\n`;
+        itemsWithSelisih.forEach((item) => {
+          waMessage += `- ${item.nama} (${item.ukuran}): Selisih *${
+            item.jumlahKirim - item.jumlahTerima
+          }* pcs\n`;
+        });
+        await whatsappService.sendMessageToStore(user.cabang, waMessage);
+      }
 
-    res.status(201).json({
-      success: true,
-      message: `Penerimaan berhasil disimpan sebagai PENDING dengan nomor ${pendingNomor}.`,
-    });
+      res
+        .status(201)
+        .json({
+          success: true,
+          message: `Penerimaan berhasil disimpan sebagai PENDING dengan nomor ${newPendingNomor}.`,
+        });
+    }
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error in savePending:", error);
