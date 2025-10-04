@@ -51,8 +51,6 @@ app.use('/api/spk', spkRoutes);
 const whatsappRoutes = require('./src/routes/whatsapp.routes.js');
 app.use('/api/whatsapp', whatsappRoutes);
 
-whatsappService.initialize();
-
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
