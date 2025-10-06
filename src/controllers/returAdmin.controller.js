@@ -51,10 +51,16 @@ const loadSelisihData = async (req, res) => {
         selisih: item.jumlahKirim - item.jumlahTerima,
       }));
 
-    const [sjHeaderRows] = await pool.query(
-      `SELECT *, LEFT(sj_nomor, 3) AS gudang_asal_kode FROM tdc_sj_hdr WHERE sj_nomor = ?`,
-      [rows[0].sj_nomor]
-    );
+    const sjHeaderQuery = `
+        SELECT 
+            h.*, 
+            LEFT(h.sj_nomor, 3) AS gudang_asal_kode,
+            g.gdg_nama AS gudang_asal_nama 
+        FROM tdc_sj_hdr h
+        LEFT JOIN tgudang g ON LEFT(h.sj_nomor, 3) = g.gdg_kode
+        WHERE h.sj_nomor = ?
+    `;
+    const [sjHeaderRows] = await pool.query(sjHeaderQuery, [rows[0].sj_nomor]);
 
     res.status(200).json({
       success: true,
