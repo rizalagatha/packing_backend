@@ -118,8 +118,8 @@ const saveData = async (req, res) => {
 
     if (header.nomorPending) {
       await connection.query(
-        'UPDATE tpendingsj SET status = "CLOSE" WHERE pending_nomor = ?',
-        [header.nomorPending]
+        'UPDATE tpendingsj SET status = "CLOSE", tj_nomor = ? WHERE pending_nomor = ?',
+        [tjNomor, header.nomorPending]
       );
     }
 
@@ -160,12 +160,10 @@ const savePending = async (req, res) => {
       );
 
       await connection.commit();
-      res
-        .status(200)
-        .json({
-          success: true,
-          message: `Pending ${pending_nomor} berhasil diperbarui.`,
-        });
+      res.status(200).json({
+        success: true,
+        message: `Pending ${pending_nomor} berhasil diperbarui.`,
+      });
     } else {
       // --- LOGIKA MEMBUAT PENDING BARU ---
       const newPendingNomor = await generateNewPendingNumber(
@@ -199,12 +197,10 @@ const savePending = async (req, res) => {
         await whatsappService.sendMessageToStore(user.cabang, waMessage);
       }
 
-      res
-        .status(201)
-        .json({
-          success: true,
-          message: `Penerimaan berhasil disimpan sebagai PENDING dengan nomor ${newPendingNomor}.`,
-        });
+      res.status(201).json({
+        success: true,
+        message: `Penerimaan berhasil disimpan sebagai PENDING dengan nomor ${newPendingNomor}.`,
+      });
     }
   } catch (error) {
     if (connection) await connection.rollback();

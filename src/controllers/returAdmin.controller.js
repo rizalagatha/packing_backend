@@ -13,15 +13,10 @@ const searchPendingRetur = async (req, res) => {
   try {
     const user = req.user;
     const query = `
-            SELECT 
-                pending_nomor AS nomor, 
-                sj_nomor,
-                tanggal_pending AS tanggal,
-                'OPEN' as status
-            FROM tpendingsj -- -> Menggunakan tabel tpendingsj
-            WHERE 
-                kode_store = ? 
-                AND status = 'OPEN'
+            SELECT pending_nomor AS nomor, sj_nomor, tj_nomor, tanggal_pending AS tanggal 
+            FROM tpendingsj
+            WHERE kode_store = ? AND status = 'CLOSE' 
+              AND tj_nomor NOT IN (SELECT rb_noterima FROM trbdc_hdr WHERE rb_noterima <> '')
             ORDER BY tanggal_pending DESC;
         `;
     const [rows] = await pool.query(query, [user.cabang]);
@@ -97,7 +92,7 @@ const saveRetur = async (req, res) => {
         rbNomor,
         header.tanggalRetur,
         header.gudangTujuan,
-        header.nomorPending, // -> Menggunakan nomorPending
+        header.nomorPenerimaan,
         header.keterangan,
         user.kode,
       ]
@@ -116,10 +111,10 @@ const saveRetur = async (req, res) => {
       );
     }
 
-    await connection.query(
-      `UPDATE tpendingsj SET status = 'CLOSE' WHERE pending_nomor = ?`, // -> Menggunakan tabel tpendingsj
-      [header.nomorPending]
-    );
+    // await connection.query(
+    //   `UPDATE tpendingsj SET status = 'CLOSE' WHERE pending_nomor = ?`, // -> Menggunakan tabel tpendingsj
+    //   [header.nomorPending]
+    // );
 
     await connection.commit();
     res.status(201).json({
