@@ -52,7 +52,7 @@ const loadSelisihData = async (req, res) => {
       }));
 
     const [sjHeaderRows] = await pool.query(
-      "SELECT * FROM tdc_sj_hdr WHERE sj_nomor = ?",
+      `SELECT *, LEFT(sj_nomor, 3) AS gudang_asal_kode FROM tdc_sj_hdr WHERE sj_nomor = ?`,
       [rows[0].sj_nomor]
     );
 
