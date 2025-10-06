@@ -1,7 +1,6 @@
 const pool = require("../config/database");
 const { format } = require("date-fns");
 
-// --- Helper Functions ---
 const generateNewRbNumber = async (gudang, tanggal) => {
   const date = new Date(tanggal);
   const prefix = `${gudang}.RB.${format(date, "yyMM")}.`;
@@ -10,11 +9,6 @@ const generateNewRbNumber = async (gudang, tanggal) => {
   return `${prefix}${rows[0].next_num.toString().padStart(4, "0")}`;
 };
 
-// --- Controller Functions ---
-
-/**
- * Mencari data dari tabel tampungan selisih yang statusnya masih OPEN.
- */
 const searchPendingRetur = async (req, res) => {
   try {
     const user = req.user;
@@ -22,8 +16,9 @@ const searchPendingRetur = async (req, res) => {
             SELECT 
                 pending_nomor AS nomor, 
                 sj_nomor,
-                tanggal_pending AS tanggal
-            FROM tpendingsj 
+                tanggal_pending AS tanggal,
+                'OPEN' as status
+            FROM tpendingsj -- -> Menggunakan tabel tpendingsj
             WHERE 
                 kode_store = ? 
                 AND status = 'OPEN'
@@ -39,9 +34,6 @@ const searchPendingRetur = async (req, res) => {
   }
 };
 
-/**
- * Memuat item yang selisih dari sebuah nomor pending.
- */
 const loadSelisihData = async (req, res) => {
   try {
     const { pendingNomor } = req.params;
@@ -64,7 +56,6 @@ const loadSelisihData = async (req, res) => {
         selisih: item.jumlahKirim - item.jumlahTerima,
       }));
 
-    // Ambil data header SJ asli untuk kelengkapan info
     const [sjHeaderRows] = await pool.query(
       "SELECT * FROM tdc_sj_hdr WHERE sj_nomor = ?",
       [rows[0].sj_nomor]
@@ -85,9 +76,6 @@ const loadSelisihData = async (req, res) => {
   }
 };
 
-/**
- * Menyimpan data retur dan menutup status pending.
- */
 const saveRetur = async (req, res) => {
   const { header, items } = req.body;
   const user = req.user;
@@ -100,6 +88,8 @@ const saveRetur = async (req, res) => {
     const timestamp = format(new Date(), "yyyyMMddHHmmssSSS");
     const idrec = `${user.cabang}RB${timestamp}`;
 
+    // --- PERBAIKAN LOGIKA DI SINI ---
+    // `rb_noterima` diisi dengan `nomorPending` dari frontend.
     await connection.query(
       `INSERT INTO trbdc_hdr (rb_idrec, rb_nomor, rb_tanggal, rb_kecab, rb_noterima, rb_ket, user_create, date_create) VALUES (?, ?, ?, ?, ?, ?, ?, NOW());`,
       [
@@ -107,7 +97,7 @@ const saveRetur = async (req, res) => {
         rbNomor,
         header.tanggalRetur,
         header.gudangTujuan,
-        header.nomorPenerimaan,
+        header.nomorPending, // -> Menggunakan nomorPending
         header.keterangan,
         user.kode,
       ]
@@ -116,7 +106,6 @@ const saveRetur = async (req, res) => {
     const detailValues = items.map((item, index) => {
       const nourut = index + 1;
       const iddrec = `${idrec}${nourut}`;
-      // Simpan jumlah selisih ke kolom rbd_jumlah
       return [idrec, iddrec, rbNomor, item.kode, item.ukuran, item.selisih, 0];
     });
 
@@ -127,20 +116,17 @@ const saveRetur = async (req, res) => {
       );
     }
 
-    // --- UPDATE STATUS PENDING MENJADI CLOSE ---
     await connection.query(
-      `UPDATE tpendingsj SET status = 'CLOSE' WHERE pending_nomor = ?`,
-      [header.nomorPenerimaan]
+      `UPDATE tpendingsj SET status = 'CLOSE' WHERE pending_nomor = ?`, // -> Menggunakan tabel tpendingsj
+      [header.nomorPending]
     );
 
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Retur berhasil disimpan dengan nomor ${rbNomor}.`,
-        data: { nomor: rbNomor },
-      });
+    res.status(201).json({
+      success: true,
+      message: `Retur berhasil disimpan dengan nomor ${rbNomor}.`,
+      data: { nomor: rbNomor },
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error in saveRetur:", error);
