@@ -12,10 +12,10 @@ const generateNewRbNumber = async (gudang, tanggal) => {
 const searchPendingRetur = async (req, res) => {
   try {
     const user = req.user;
-    // Ambil 'status' dari query, default-nya adalah 'OPEN'
+    // Ambil 'status' dari query, defaultnya adalah 'OPEN'
     const { status = "OPEN" } = req.query;
 
-    const query = `
+    let query = `
             SELECT 
                 pending_nomor AS nomor, 
                 sj_nomor, 
@@ -25,11 +25,20 @@ const searchPendingRetur = async (req, res) => {
             FROM tpendingsj 
             WHERE 
                 kode_store = ? 
-                AND status = ? -- -> Gunakan parameter status di sini
-            ORDER BY tanggal_pending DESC;
+                AND status = ?
         `;
+    const params = [user.cabang, status];
 
-    const [rows] = await pool.query(query, [user.cabang, status]);
+    // --- INI PERBAIKAN UTAMANYA ---
+    // Jika yang dicari adalah yang sudah 'CLOSE', tambahkan filter tambahan
+    // untuk memastikan ia belum pernah dibuatkan returnya.
+    if (status === "CLOSE") {
+      query += ` AND tj_nomor NOT IN (SELECT rb_noterima FROM trbdc_hdr WHERE rb_noterima <> '' AND rb_noterima IS NOT NULL)`;
+    }
+
+    query += ` ORDER BY tanggal_pending DESC;`;
+
+    const [rows] = await pool.query(query, params);
     res.status(200).json({ success: true, data: { items: rows } });
   } catch (error) {
     console.error("Error in searchPendingRetur:", error);
