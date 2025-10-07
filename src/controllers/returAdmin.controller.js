@@ -108,16 +108,15 @@ const saveRetur = async (req, res) => {
     const timestamp = format(new Date(), "yyyyMMddHHmmssSSS");
     const idrec = `${user.cabang}RB${timestamp}`;
 
-    // --- PERBAIKAN LOGIKA DI SINI ---
-    // `rb_noterima` diisi dengan `nomorPending` dari frontend.
+    // --- PERBAIKAN DI SINI ---
+    // `rb_noterima` dikosongkan (tidak diisi).
     await connection.query(
-      `INSERT INTO trbdc_hdr (rb_idrec, rb_nomor, rb_tanggal, rb_kecab, rb_noterima, rb_ket, user_create, date_create) VALUES (?, ?, ?, ?, ?, ?, ?, NOW());`,
+      `INSERT INTO trbdc_hdr (rb_idrec, rb_nomor, rb_tanggal, rb_kecab, rb_ket, user_create, date_create) VALUES (?, ?, ?, ?, ?, ?, NOW());`,
       [
         idrec,
         rbNomor,
         header.tanggalRetur,
         header.gudangTujuan,
-        header.nomorPenerimaan,
         header.keterangan,
         user.kode,
       ]
@@ -136,9 +135,10 @@ const saveRetur = async (req, res) => {
       );
     }
 
+    // --- UPDATE STATUS PENDING JUGA DIHAPUS/DIKOMENTARI ---
     // await connection.query(
-    //   `UPDATE tpendingsj SET status = 'CLOSE' WHERE pending_nomor = ?`, // -> Menggunakan tabel tpendingsj
-    //   [header.nomorPending]
+    //     `UPDATE tpendingsj SET status = 'CLOSE' WHERE pending_nomor = ?`,
+    //     [header.nomorPending]
     // );
 
     await connection.commit();
