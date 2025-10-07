@@ -12,6 +12,8 @@ router.post('/', authenticateToken, packingController.createPacking);
 
 router.get('/history', authenticateToken, packingController.getPackingHistory);
 
+router.get('/search', authenticateToken, packingController.searchPacking);
+
 router.get('/:nomor', authenticateToken, packingController.getPackingDetail);
 
 // Anda bisa menambahkan rute lain terkait packing di sini nanti

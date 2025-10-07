@@ -169,8 +169,27 @@ const getPackingDetail = async (req, res) => {
   }
 };
 
+const searchPacking = async (req, res) => {
+  try {
+    const { term } = req.query;
+    const searchTerm = `%${term || ''}%`;
+    const query = `
+      SELECT pack_nomor, pack_spk_nomor, pack_tanggal 
+      FROM tpacking 
+      WHERE pack_nomor LIKE ? OR pack_spk_nomor LIKE ?
+      ORDER BY created_at DESC LIMIT 20;
+    `;
+    const [rows] = await pool.query(query, [searchTerm, searchTerm]);
+    res.status(200).json({ success: true, data: { items: rows } });
+  } catch (error) {
+    console.error('Error in searchPacking:', error);
+    res.status(500).json({ success: false, message: 'Gagal mencari data packing.' });
+  }
+};
+
 module.exports = {
   createPacking,
   getPackingHistory,
   getPackingDetail,
+  searchPacking,
 };
