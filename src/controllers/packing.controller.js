@@ -110,25 +110,27 @@ const createPacking = async (req, res) => {
 
 const getPackingHistory = async (req, res) => {
   try {
-    const { kode: user_kode } = req.user;
-
+    // Filter `WHERE p.pack_user_kode = ?` telah dihapus dari query ini
     const query = `
-      SELECT pack_nomor, pack_tanggal, pack_spk_nomor,
-      (SELECT COUNT(*) FROM tpacking_dtl WHERE packd_pack_nomor = p.pack_nomor) as jumlah_item
-      FROM tpacking p 
-      WHERE p.pack_user_kode = ? 
-      ORDER BY p.created_at DESC 
-      LIMIT 5
-    `;
+            SELECT 
+                p.pack_nomor, 
+                p.pack_tanggal, 
+                p.pack_spk_nomor, 
+                (SELECT COUNT(*) FROM tpacking_dtl WHERE packd_pack_nomor = p.pack_nomor) as jumlah_item
+            FROM tpacking p 
+            ORDER BY p.created_at DESC 
+            LIMIT 20; -- Kita perbanyak limitnya untuk web
+        `;
 
-    const [rows] = await pool.query(query, [user_kode]);
+    // Perhatikan bahwa `pool.query` sekarang tidak lagi memerlukan parameter user_kode
+    const [rows] = await pool.query(query);
 
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
     console.error("Gagal mengambil riwayat packing:", error);
     res
       .status(500)
-      .json({ success: false, message: "Terjadi kesalahan pada server." });
+      .json({ success: false, message: "Gagal mengambil riwayat packing." });
   }
 };
 
