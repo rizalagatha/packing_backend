@@ -165,12 +165,12 @@ const getPackingDetail = async (req, res) => {
     // 3. Query BARU untuk membuat string "DETAIL UKURAN" secara otomatis
     const [ukuranRows] = await pool.query(
       `SELECT 
-                GROUP_CONCAT(CONCAT(packd_size, '=', total_qty) ORDER BY FIELD(packd_size, 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL') SEPARATOR ' ') AS detail_ukuran
+                GROUP_CONCAT(CONCAT(size, '=', total_qty) ORDER BY FIELD(size, 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL') SEPARATOR ' ') AS detail_ukuran
              FROM (
-                 SELECT packd_size, SUM(packd_qty) AS total_qty
+                 SELECT size, SUM(packd_qty) AS total_qty
                  FROM tpacking_dtl
                  WHERE packd_pack_nomor = ?
-                 GROUP BY packd_size
+                 GROUP BY size
              ) AS subquery`,
       [nomor]
     );
