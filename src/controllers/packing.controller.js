@@ -134,11 +134,18 @@ const getPackingHistory = async (req, res) => {
 
 const getPackingDetail = async (req, res) => {
   try {
-    const { nomor } = req.params; // Ambil nomor packing dari URL
+    const { nomor } = req.params;
 
-    // Ambil data header
+    // 1. Query untuk mengambil data header, sekarang digabung dengan tspk untuk dapat NAMA SPK
     const [headerRows] = await pool.query(
-      "SELECT pack_nomor, pack_tanggal, pack_spk_nomor, pack_user_kode FROM tpacking WHERE pack_nomor = ?",
+      `SELECT 
+                p.pack_nomor, 
+                p.pack_tanggal, 
+                p.pack_spk_nomor, 
+                spk.spk_nama AS pack_nama_spk
+             FROM tpacking p
+             LEFT JOIN tspk spk ON p.pack_spk_nomor = spk.spk_nomor
+             WHERE p.pack_nomor = ?`,
       [nomor]
     );
 
@@ -147,17 +154,34 @@ const getPackingDetail = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Nomor packing tidak ditemukan." });
     }
+    const header = headerRows[0];
 
-    // Ambil data item detail
+    // 2. Query untuk mengambil semua item (tidak berubah)
     const [itemRows] = await pool.query(
       "SELECT * FROM tpacking_dtl WHERE packd_pack_nomor = ?",
       [nomor]
     );
 
+    // 3. Query BARU untuk membuat string "DETAIL UKURAN" secara otomatis
+    const [ukuranRows] = await pool.query(
+      `SELECT 
+                GROUP_CONCAT(CONCAT(packd_size, '=', total_qty) ORDER BY FIELD(packd_size, 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL') SEPARATOR ' ') AS detail_ukuran
+             FROM (
+                 SELECT packd_size, SUM(packd_qty) AS total_qty
+                 FROM tpacking_dtl
+                 WHERE packd_pack_nomor = ?
+                 GROUP BY packd_size
+             ) AS subquery`,
+      [nomor]
+    );
+
+    // 4. Gabungkan hasil query ukuran ke dalam data header
+    header.detail_ukuran = ukuranRows[0].detail_ukuran || "";
+
     res.status(200).json({
       success: true,
       data: {
-        header: headerRows[0],
+        header: header,
         items: itemRows,
       },
     });
@@ -172,7 +196,7 @@ const getPackingDetail = async (req, res) => {
 const searchPacking = async (req, res) => {
   try {
     const { term } = req.query;
-    const searchTerm = `%${term || ''}%`;
+    const searchTerm = `%${term || ""}%`;
     const query = `
       SELECT pack_nomor, pack_spk_nomor, pack_tanggal 
       FROM tpacking 
@@ -182,8 +206,10 @@ const searchPacking = async (req, res) => {
     const [rows] = await pool.query(query, [searchTerm, searchTerm]);
     res.status(200).json({ success: true, data: { items: rows } });
   } catch (error) {
-    console.error('Error in searchPacking:', error);
-    res.status(500).json({ success: false, message: 'Gagal mencari data packing.' });
+    console.error("Error in searchPacking:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mencari data packing." });
   }
 };
 
