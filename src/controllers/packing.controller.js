@@ -109,64 +109,55 @@ const createPacking = async (req, res) => {
 };
 
 const getPackingHistory = async (req, res) => {
-  try {
-    // Ambil parameter dari query string, beri nilai default
-    const { startDate, endDate, page = 1, limit = 15 } = req.query;
+    try {
+        const { filterByUser, startDate, endDate, page = 1, limit = 20 } = req.query;
+        const user = req.user;
 
-    if (!startDate || !endDate) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Filter startDate dan endDate diperlukan.",
-        });
-    }
+        let baseQuery = `FROM tpacking p`;
+        let whereClauses = [];
+        let params = [];
 
-    const offset = (page - 1) * limit;
+        // Logika untuk filter tanggal (untuk web)
+        if (startDate && endDate) {
+            whereClauses.push(`p.pack_tanggal BETWEEN ? AND ?`);
+            params.push(startDate, endDate);
+        }
 
-    // Query untuk menghitung total data yang cocok (untuk paginasi)
-    const countQuery = `
-            SELECT COUNT(*) as total 
-            FROM tpacking 
-            WHERE pack_tanggal BETWEEN ? AND ?;
-        `;
-    const [countRows] = await pool.query(countQuery, [startDate, endDate]);
-    const totalItems = countRows[0].total;
+        // Logika untuk filter per user (untuk mobile)
+        if (filterByUser === 'true') {
+            whereClauses.push(`p.pack_user_kode = ?`);
+            params.push(user.kode);
+        }
 
-    // Query untuk mengambil data per halaman
-    const dataQuery = `
-            SELECT 
-                p.pack_nomor, 
-                p.pack_tanggal, 
-                p.pack_spk_nomor
-            FROM tpacking p 
-            WHERE p.pack_tanggal BETWEEN ? AND ?
+        const whereQuery = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+        // Query untuk total data
+        const [countRows] = await pool.query(`SELECT COUNT(*) as total ${baseQuery} ${whereQuery}`, params);
+        const totalItems = countRows[0].total;
+        
+        // Query untuk mengambil data
+        const offset = (page - 1) * limit;
+        const dataQuery = `
+            SELECT p.pack_nomor, p.pack_tanggal, p.pack_spk_nomor 
+            ${baseQuery} ${whereQuery}
             ORDER BY p.created_at DESC 
             LIMIT ? OFFSET ?;
         `;
+        const [rows] = await pool.query(dataQuery, [...params, parseInt(limit), parseInt(offset)]);
 
-    const [rows] = await pool.query(dataQuery, [
-      startDate,
-      endDate,
-      parseInt(limit),
-      parseInt(offset),
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: rows,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(totalItems / limit),
-        totalItems: totalItems,
-      },
-    });
-  } catch (error) {
-    console.error("Gagal mengambil riwayat packing:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Gagal mengambil riwayat packing." });
-  }
+        res.status(200).json({ 
+            success: true, 
+            data: rows,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalItems / limit),
+                totalItems: totalItems,
+            }
+        });
+    } catch (error) {
+        console.error('Gagal mengambil riwayat packing:', error);
+        res.status(500).json({ success: false, message: 'Gagal mengambil riwayat packing.' });
+    }
 };
 
 const getPackingDetail = async (req, res) => {
