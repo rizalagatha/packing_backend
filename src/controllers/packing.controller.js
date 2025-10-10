@@ -110,22 +110,57 @@ const createPacking = async (req, res) => {
 
 const getPackingHistory = async (req, res) => {
   try {
-    // Filter `WHERE p.pack_user_kode = ?` telah dihapus dari query ini
-    const query = `
+    // Ambil parameter dari query string, beri nilai default
+    const { startDate, endDate, page = 1, limit = 15 } = req.query;
+
+    if (!startDate || !endDate) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Filter startDate dan endDate diperlukan.",
+        });
+    }
+
+    const offset = (page - 1) * limit;
+
+    // Query untuk menghitung total data yang cocok (untuk paginasi)
+    const countQuery = `
+            SELECT COUNT(*) as total 
+            FROM tpacking 
+            WHERE pack_tanggal BETWEEN ? AND ?;
+        `;
+    const [countRows] = await pool.query(countQuery, [startDate, endDate]);
+    const totalItems = countRows[0].total;
+
+    // Query untuk mengambil data per halaman
+    const dataQuery = `
             SELECT 
                 p.pack_nomor, 
                 p.pack_tanggal, 
-                p.pack_spk_nomor, 
-                (SELECT COUNT(*) FROM tpacking_dtl WHERE packd_pack_nomor = p.pack_nomor) as jumlah_item
+                p.pack_spk_nomor
             FROM tpacking p 
+            WHERE p.pack_tanggal BETWEEN ? AND ?
             ORDER BY p.created_at DESC 
-            LIMIT 20; -- Kita perbanyak limitnya untuk web
+            LIMIT ? OFFSET ?;
         `;
 
-    // Perhatikan bahwa `pool.query` sekarang tidak lagi memerlukan parameter user_kode
-    const [rows] = await pool.query(query);
+    const [rows] = await pool.query(dataQuery, [
+      startDate,
+      endDate,
+      parseInt(limit),
+      parseInt(offset),
+    ]);
 
-    res.status(200).json({ success: true, data: rows });
+    res.status(200).json({
+      success: true,
+      data: rows,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(totalItems / limit),
+        totalItems: totalItems,
+      },
+    });
   } catch (error) {
     console.error("Gagal mengambil riwayat packing:", error);
     res
