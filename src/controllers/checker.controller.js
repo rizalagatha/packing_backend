@@ -21,15 +21,19 @@ const loadStbjData = async (req, res) => {
   try {
     const { stbjNomor } = req.params;
 
+    // --- QUERY DIPERBAIKI DENGAN LEFT JOIN ---
     const stbjQuery = `
             SELECT 
-                d.stbjd_spk_nomor, d.stbjd_size AS ukuran, d.stbjd_jumlah AS jumlahKirim, d.stbjd_packing,
+                d.stbjd_spk_nomor, 
+                d.stbjd_size AS ukuran, 
+                d.stbjd_jumlah AS jumlahKirim, 
+                d.stbjd_packing,
                 TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)) AS nama,
                 dtl.brgd_barcode as barcode
             FROM tstbj_dtl d
-            JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
-            JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
-            JOIN tbarangdc_dtl dtl ON brg.brg_kode = dtl.brgd_kode AND d.stbjd_size = dtl.brgd_ukuran
+            LEFT JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
+            LEFT JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
+            LEFT JOIN tbarangdc_dtl dtl ON brg.brg_kode = dtl.brgd_kode AND d.stbjd_size = dtl.brgd_ukuran
             WHERE d.stbjd_stbj_nomor = ?;
         `;
     const [stbjItems] = await pool.query(stbjQuery, [stbjNomor]);
@@ -37,18 +41,18 @@ const loadStbjData = async (req, res) => {
     if (stbjItems.length === 0) {
       return res
         .status(404)
-        .json({ success: false, message: "Data STBJ tidak ditemukan." });
+        .json({
+          success: false,
+          message: "Data detail untuk STBJ ini tidak ditemukan.",
+        });
     }
 
-    // Ambil semua nomor packing yang terkait, lalu filter yang kosong/null
     const packingNomors = stbjItems
       .map((item) => item.stbjd_packing)
-      .filter((p) => p); // Menghapus nilai null, undefined, atau string kosong
+      .filter((p) => p && p.trim() !== "");
 
     let packingMap = new Map();
 
-    // --- PERBAIKAN DI SINI ---
-    // Hanya jalankan query packing jika ada nomor packing yang valid
     if (packingNomors.length > 0) {
       const packingQuery = `
                 SELECT packd_barcode, SUM(packd_qty) as jumlahPacking 
@@ -56,7 +60,6 @@ const loadStbjData = async (req, res) => {
                 WHERE packd_pack_nomor IN (?)
                 GROUP BY packd_barcode;
             `;
-      // Gunakan Set untuk memastikan nilai unik jika ada nomor packing yang sama berulang
       const [packingItems] = await pool.query(packingQuery, [
         [...new Set(packingNomors)],
       ]);
@@ -64,9 +67,7 @@ const loadStbjData = async (req, res) => {
         packingItems.map((p) => [p.packd_barcode, p.jumlahPacking])
       );
     }
-    // -------------------------
 
-    // Gabungkan data STBJ dengan data Packing (atau 0 jika tidak ada)
     const finalData = stbjItems.map((item) => {
       const jumlahTerima = packingMap.get(item.barcode) || 0;
       return {
