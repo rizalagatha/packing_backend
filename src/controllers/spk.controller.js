@@ -7,8 +7,7 @@ const findSpkByBarcode = async (req, res) => {
         SELECT DISTINCT 
             c.spkd_nomor, 
             d.spk_nama,
-            d.spk_tanggal,
-            d.spk_nomor_po 
+            d.spk_tanggal
         FROM tbarangdc_dtl b 
           LEFT JOIN tspk_dc c ON b.brgd_kode = c.spkd_kode
           LEFT JOIN tspk d ON c.spkd_nomor = d.spk_nomor
