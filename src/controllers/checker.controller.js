@@ -21,13 +21,9 @@ const loadStbjData = async (req, res) => {
   try {
     const { stbjNomor } = req.params;
 
-    // --- QUERY DIPERBAIKI DENGAN LEFT JOIN ---
     const stbjQuery = `
             SELECT 
-                d.stbjd_spk_nomor, 
-                d.stbjd_size AS ukuran, 
-                d.stbjd_jumlah AS jumlahKirim, 
-                d.stbjd_packing,
+                d.stbjd_spk_nomor, d.stbjd_size AS ukuran, d.stbjd_jumlah AS jumlahKirim, d.stbjd_packing,
                 TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)) AS nama,
                 dtl.brgd_barcode as barcode
             FROM kencanaprint.tstbj_dtl d
@@ -47,12 +43,15 @@ const loadStbjData = async (req, res) => {
         });
     }
 
+    // Ambil semua nomor packing yang terkait, lalu filter yang kosong/null
     const packingNomors = stbjItems
       .map((item) => item.stbjd_packing)
-      .filter((p) => p && p.trim() !== "");
+      .filter((p) => p && p.trim() !== ""); // Menghapus nilai null, undefined, atau string kosong
 
     let packingMap = new Map();
 
+    // --- PERBAIKAN DI SINI ---
+    // Hanya jalankan query packing jika ada nomor packing yang valid
     if (packingNomors.length > 0) {
       const packingQuery = `
                 SELECT packd_barcode, SUM(packd_qty) as jumlahPacking 
@@ -60,6 +59,7 @@ const loadStbjData = async (req, res) => {
                 WHERE packd_pack_nomor IN (?)
                 GROUP BY packd_barcode;
             `;
+      // Gunakan Set untuk memastikan nilai unik jika ada nomor packing yang sama berulang
       const [packingItems] = await pool.query(packingQuery, [
         [...new Set(packingNomors)],
       ]);
@@ -67,7 +67,9 @@ const loadStbjData = async (req, res) => {
         packingItems.map((p) => [p.packd_barcode, p.jumlahPacking])
       );
     }
+    // -------------------------
 
+    // Gabungkan data STBJ dengan data Packing (atau 0 jika tidak ada)
     const finalData = stbjItems.map((item) => {
       const jumlahTerima = packingMap.get(item.barcode) || 0;
       return {
