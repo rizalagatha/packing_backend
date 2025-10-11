@@ -10,6 +10,7 @@ router.use(authenticateToken);
 // Rute-rute spesifik harus didefinisikan terlebih dahulu
 router.get('/history', sjController.getSuratJalanHistory);
 router.get('/load-items', sjController.getItemsForLoad);
+router.get('/load-from-packing/:packNomor', sjController.getItemsFromPacking);
 router.get('/search/stores', sjController.searchStores);
 router.get('/search/permintaan', sjController.searchPermintaan);
 router.get('/search/terima-rb', sjController.searchTerimaRb);
