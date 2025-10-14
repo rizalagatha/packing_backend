@@ -26,7 +26,7 @@ const loadStbjData = async (req, res) => {
                 d.stbjd_spk_nomor, 
                 d.stbjd_size AS ukuran, 
                 d.stbjd_jumlah AS jumlahKirim,
-                d.stbjd_packing 
+                d.stbjd_packing, 
                 TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)) AS nama,
                 dtl.brgd_barcode as barcode
             FROM kencanaprint.tstbj_dtl d
