@@ -21,16 +21,14 @@ const loadStbjData = async (req, res) => {
   try {
     const { stbjNomor } = req.params;
 
-    // --- QUERY DIPERBAIKI DENGAN LEFT JOIN ---
     const stbjQuery = `
             SELECT 
                 d.stbjd_spk_nomor, 
                 d.stbjd_size AS ukuran, 
                 d.stbjd_jumlah AS jumlahKirim, 
-                d.stbjd_packing,
                 TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)) AS nama,
                 dtl.brgd_barcode as barcode
-            FROM kencanaprint.tstbj_dtl d
+            FROM tstbj_dtl d
             LEFT JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
             LEFT JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
             LEFT JOIN tbarangdc_dtl dtl ON brg.brg_kode = dtl.brgd_kode AND d.stbjd_size = dtl.brgd_ukuran
@@ -47,40 +45,8 @@ const loadStbjData = async (req, res) => {
         });
     }
 
-    // Ambil nomor packing yang valid
-    const packingNomors = stbjItems
-      .map((item) => item.stbjd_packing)
-      .filter((p) => p && p.trim() !== "");
-
-    let packingMap = new Map();
-
-    // Hanya jalankan query packing jika ada nomor packing
-    if (packingNomors.length > 0) {
-      const packingQuery = `
-                SELECT packd_barcode, SUM(packd_qty) as jumlahPacking 
-                FROM tpacking_dtl 
-                WHERE packd_pack_nomor IN (?)
-                GROUP BY packd_barcode;
-            `;
-      const [packingItems] = await pool.query(packingQuery, [
-        [...new Set(packingNomors)],
-      ]);
-      packingMap = new Map(
-        packingItems.map((p) => [p.packd_barcode, p.jumlahPacking])
-      );
-    }
-
-    // Gabungkan data
-    const finalData = stbjItems.map((item) => {
-      const jumlahTerima = packingMap.get(item.barcode) || 0;
-      return {
-        ...item,
-        jumlahTerima: jumlahTerima,
-        selisih: item.jumlahKirim - jumlahTerima,
-      };
-    });
-
-    res.status(200).json({ success: true, data: finalData });
+    // Sekarang kita hanya mengembalikan data dari STBJ, tanpa data packing
+    res.status(200).json({ success: true, data: stbjItems });
   } catch (error) {
     console.error("Error in loadStbjData:", error);
     res
