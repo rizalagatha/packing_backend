@@ -58,22 +58,28 @@ const getPackingDetailForChecker = async (req, res) => {
   try {
     const { nomor } = req.params;
 
+    // PERBAIKAN: Sesuaikan nama kolom dengan struktur tabel asli
     const query = `
       SELECT 
         packd_barcode,
         packd_qty,
-        packd_pack_nomor,
+        packd_pack_nomor,  -- Pastikan ini nama kolom yang benar
         CONCAT(packd_barcode, '-', packd_pack_nomor) as uniqueKey
       FROM tpacking_dtl
-      WHERE packd_pack_nomor = ?
+      WHERE packd_pack_nomor = ?  -- Kolom untuk filter berdasarkan nomor packing
     `;
 
+    console.log("Query packing nomor:", nomor); // DEBUG LOG
+
     const [rows] = await pool.query(query, [nomor]);
+
+    console.log("Rows found:", rows.length); // DEBUG LOG
+    console.log("Sample data:", rows[0]); // DEBUG LOG
 
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "Nomor packing tidak ditemukan.",
+        message: "Nomor packing tidak ditemukan di detail.",
       });
     }
 
@@ -85,7 +91,7 @@ const getPackingDetailForChecker = async (req, res) => {
     console.error("Error in getPackingDetailForChecker:", error);
     res.status(500).json({
       success: false,
-      message: "Gagal memuat detail packing untuk checker.",
+      message: error.message || "Gagal memuat detail packing untuk checker.",
     });
   }
 };
