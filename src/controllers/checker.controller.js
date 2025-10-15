@@ -22,9 +22,7 @@ const loadStbjData = async (req, res) => {
     const { stbjNomor } = req.params;
 
     const stbjQuery = `
-      SELECT 
-        @row_num := @row_num + 1 AS row_id,
-        d.stbjd_stbj_nomor,
+      SELECT DISTINCT
         d.stbjd_spk_nomor, 
         d.stbjd_size AS ukuran, 
         d.stbjd_jumlah AS jumlahKirim,
@@ -34,8 +32,7 @@ const loadStbjData = async (req, res) => {
       FROM kencanaprint.tstbj_dtl d
       LEFT JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
       LEFT JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
-      LEFT JOIN tbarangdc_dtl dtl ON brg.brg_kode = dtl.brgd_kode AND d.stbjd_size = dtl.brgd_ukuran,
-      (SELECT @row_num := 0) AS r
+      LEFT JOIN tbarangdc_dtl dtl ON brg.brg_kode = dtl.brgd_kode AND d.stbjd_size = dtl.brgd_ukuran
       WHERE d.stbjd_stbj_nomor = ?
       ORDER BY d.stbjd_packing, d.stbjd_spk_nomor, d.stbjd_size;
     `;
@@ -53,10 +50,10 @@ const loadStbjData = async (req, res) => {
       });
     }
 
-    // Add uniqueKey di backend
+    // Add uniqueKey
     const itemsWithKey = stbjItems.map((item, index) => ({
       ...item,
-      uniqueKey: `${item.stbjd_stbj_nomor}-${item.stbjd_spk_nomor}-${item.ukuran}-${item.stbjd_packing}-${item.row_id}`,
+      uniqueKey: `${item.stbjd_spk_nomor}-${item.ukuran}-${item.stbjd_packing}-${index}`,
     }));
 
     console.log("Sample item:", itemsWithKey[0]);
