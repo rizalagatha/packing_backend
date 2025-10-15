@@ -28,7 +28,8 @@ const loadStbjData = async (req, res) => {
                 d.stbjd_jumlah AS jumlahKirim,
                 d.stbjd_packing, 
                 TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)) AS nama,
-                dtl.brgd_barcode as barcode
+                dtl.brgd_barcode as barcode,
+                CONCAT(dtl.brgd_barcode, '-', d.stbjd_packing) as uniqueKey
             FROM kencanaprint.tstbj_dtl d
             LEFT JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
             LEFT JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
@@ -38,21 +39,54 @@ const loadStbjData = async (req, res) => {
     const [stbjItems] = await pool.query(stbjQuery, [stbjNomor]);
 
     if (stbjItems.length === 0) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "Data detail untuk STBJ ini tidak ditemukan.",
-        });
+      return res.status(404).json({
+        success: false,
+        message: "Data detail untuk STBJ ini tidak ditemukan.",
+      });
     }
 
-    // Sekarang kita hanya mengembalikan data dari STBJ, tanpa data packing
     res.status(200).json({ success: true, data: stbjItems });
   } catch (error) {
     console.error("Error in loadStbjData:", error);
     res
       .status(500)
       .json({ success: false, message: "Gagal memuat data STBJ." });
+  }
+};
+
+const getPackingDetailForChecker = async (req, res) => {
+  try {
+    const { nomor } = req.params;
+
+    const query = `
+      SELECT 
+        packd_barcode,
+        packd_qty,
+        packd_pack_nomor,
+        CONCAT(packd_barcode, '-', packd_pack_nomor) as uniqueKey
+      FROM tpacking_dtl
+      WHERE packd_pack_nomor = ?
+    `;
+
+    const [rows] = await pool.query(query, [nomor]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Nomor packing tidak ditemukan.",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: { items: rows },
+    });
+  } catch (error) {
+    console.error("Error in getPackingDetailForChecker:", error);
+    res.status(500).json({
+      success: false,
+      message: "Gagal memuat detail packing untuk checker.",
+    });
   }
 };
 
@@ -78,4 +112,5 @@ module.exports = {
   searchStbj,
   loadStbjData,
   onCheck,
+  getPackingDetailForChecker,
 };

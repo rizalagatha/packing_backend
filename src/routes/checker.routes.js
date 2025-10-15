@@ -7,6 +7,7 @@ router.use(authenticateToken);
 
 router.get('/search-stbj', authenticateToken, checkerController.searchStbj);
 router.get('/load-stbj/:stbjNomor', authenticateToken, checkerController.loadStbjData);
+router.get('/packing/:nomor/checker', authenticateToken, checkerController.getPackingDetailForChecker);
 router.post('/on-check', checkerController.onCheck);
 
 module.exports = router;
