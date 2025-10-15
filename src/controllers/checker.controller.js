@@ -100,7 +100,7 @@ const getPackingDetailForChecker = async (req, res) => {
           packd_qty,
           packd_pack_nomor,
           size
-        FROM kencanaprint.tpacking_dtl
+        FROM tpacking_dtl
         WHERE packd_pack_nomor = ?
       `;
 
