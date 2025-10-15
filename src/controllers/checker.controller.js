@@ -23,14 +23,14 @@ const loadStbjData = async (req, res) => {
 
     const stbjQuery = `
       SELECT 
-        d.stbjd_id,
+        d.stbjd_stbj_nomor,
         d.stbjd_spk_nomor, 
         d.stbjd_size AS ukuran, 
         d.stbjd_jumlah AS jumlahKirim,
         d.stbjd_packing, 
         TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)) AS nama,
         dtl.brgd_barcode as barcode,
-        CONCAT(dtl.brgd_barcode, '-', d.stbjd_size, '-', d.stbjd_packing, '-', d.stbjd_id) as uniqueKey
+        CONCAT(d.stbjd_stbj_nomor, '-', d.stbjd_spk_nomor, '-', d.stbjd_size, '-', d.stbjd_packing) as uniqueKey
       FROM kencanaprint.tstbj_dtl d
       LEFT JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
       LEFT JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
@@ -61,10 +61,8 @@ const getPackingDetailForChecker = async (req, res) => {
   try {
     const { nomor } = req.params;
 
-    // Coba query dengan prefix database
     const query = `
       SELECT 
-        packd_id,
         packd_barcode,
         packd_qty,
         packd_pack_nomor,
@@ -73,22 +71,22 @@ const getPackingDetailForChecker = async (req, res) => {
       WHERE packd_pack_nomor = ?
     `;
 
-    console.log("=== PACKING DETAIL CHECK ===");
+    console.log("=== CHECKING PACKING ===");
     console.log("Nomor:", nomor);
 
     const [rows] = await pool.query(query, [nomor]);
 
-    console.log("Rows found:", rows.length);
+    console.log("Found:", rows.length, "items");
+    if (rows.length > 0) {
+      console.log("Sample:", rows[0]);
+    }
 
     if (rows.length === 0) {
-      console.log("No data found for packing:", nomor);
       return res.status(404).json({
         success: false,
         message: "Nomor packing tidak ditemukan.",
       });
     }
-
-    console.log("Sample row:", rows[0]);
 
     res.status(200).json({
       success: true,
