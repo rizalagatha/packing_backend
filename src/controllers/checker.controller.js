@@ -22,21 +22,29 @@ const loadStbjData = async (req, res) => {
     const { stbjNomor } = req.params;
 
     const stbjQuery = `
-            SELECT 
-                d.stbjd_spk_nomor, 
-                d.stbjd_size AS ukuran, 
-                d.stbjd_jumlah AS jumlahKirim,
-                d.stbjd_packing, 
-                TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)) AS nama,
-                dtl.brgd_barcode as barcode,
-                CONCAT(dtl.brgd_barcode, '-', d.stbjd_packing) as uniqueKey
-            FROM kencanaprint.tstbj_dtl d
-            LEFT JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
-            LEFT JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
-            LEFT JOIN tbarangdc_dtl dtl ON brg.brg_kode = dtl.brgd_kode AND d.stbjd_size = dtl.brgd_ukuran
-            WHERE d.stbjd_stbj_nomor = ?;
-        `;
+      SELECT 
+        d.stbjd_spk_nomor, 
+        d.stbjd_size AS ukuran, 
+        d.stbjd_jumlah AS jumlahKirim,
+        d.stbjd_packing, 
+        TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)) AS nama,
+        dtl.brgd_barcode as barcode,
+        CONCAT(dtl.brgd_barcode, '-', d.stbjd_size, '-', d.stbjd_packing) as uniqueKey
+      FROM kencanaprint.tstbj_dtl d
+      LEFT JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
+      LEFT JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
+      LEFT JOIN tbarangdc_dtl dtl ON brg.brg_kode = dtl.brgd_kode AND d.stbjd_size = dtl.brgd_ukuran
+      WHERE d.stbjd_stbj_nomor = ?;
+    `;
+
+    console.log("Loading STBJ:", stbjNomor);
+
     const [stbjItems] = await pool.query(stbjQuery, [stbjNomor]);
+
+    console.log("STBJ items found:", stbjItems.length);
+    if (stbjItems.length > 0) {
+      console.log("Sample STBJ item:", stbjItems[0]);
+    }
 
     if (stbjItems.length === 0) {
       return res.status(404).json({
@@ -48,9 +56,10 @@ const loadStbjData = async (req, res) => {
     res.status(200).json({ success: true, data: stbjItems });
   } catch (error) {
     console.error("Error in loadStbjData:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Gagal memuat data STBJ." });
+    res.status(500).json({
+      success: false,
+      message: "Gagal memuat data STBJ.",
+    });
   }
 };
 
@@ -58,28 +67,30 @@ const getPackingDetailForChecker = async (req, res) => {
   try {
     const { nomor } = req.params;
 
-    // PERBAIKAN: Sesuaikan nama kolom dengan struktur tabel asli
     const query = `
       SELECT 
         packd_barcode,
         packd_qty,
-        packd_pack_nomor,  -- Pastikan ini nama kolom yang benar
-        CONCAT(packd_barcode, '-', packd_pack_nomor) as uniqueKey
+        packd_pack_nomor,
+        size,
+        CONCAT(packd_barcode, '-', size, '-', packd_pack_nomor) as uniqueKey
       FROM tpacking_dtl
-      WHERE packd_pack_nomor = ?  -- Kolom untuk filter berdasarkan nomor packing
+      WHERE packd_pack_nomor = ?
     `;
 
-    console.log("Query packing nomor:", nomor); // DEBUG LOG
+    console.log("Checking packing nomor:", nomor);
 
     const [rows] = await pool.query(query, [nomor]);
 
-    console.log("Rows found:", rows.length); // DEBUG LOG
-    console.log("Sample data:", rows[0]); // DEBUG LOG
+    console.log("Found rows:", rows.length);
+    if (rows.length > 0) {
+      console.log("Sample:", rows[0]);
+    }
 
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "Nomor packing tidak ditemukan di detail.",
+        message: "Nomor packing tidak ditemukan.",
       });
     }
 
@@ -91,7 +102,7 @@ const getPackingDetailForChecker = async (req, res) => {
     console.error("Error in getPackingDetailForChecker:", error);
     res.status(500).json({
       success: false,
-      message: error.message || "Gagal memuat detail packing untuk checker.",
+      message: error.message,
     });
   }
 };
