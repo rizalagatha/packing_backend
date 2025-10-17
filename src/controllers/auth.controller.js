@@ -31,10 +31,10 @@ const login = async (req, res) => {
 
     const user = rows[0];
 
-    if (user.user_kode === "LUTFI", "ADIN") {
-      // Ganti dengan user kode yang benar
-      user.user_cab = "KDC";
-    }
+    // if (user.user_kode === "LUTFI", "ADIN") {
+    //   // Ganti dengan user kode yang benar
+    //   user.user_cab = "KDC";
+    // }
 
     const isPasswordMatch = user_password === user.user_password;
 
