@@ -6,9 +6,14 @@ const searchKirim = async (req, res) => {
   try {
     const user = req.user;
     const query = `
-            SELECT msk_nomor as nomor, msk_tanggal as tanggal, LEFT(msk_nomor, 3) as dari_cabang
-            FROM tmsk_hdr 
-            WHERE msk_kecab = ? AND (msk_noterima IS NULL OR msk_noterima = '');
+            SELECT 
+                h.msk_nomor as nomor, 
+                h.msk_tanggal as tanggal, 
+                LEFT(h.msk_nomor, 3) as dari_cabang,
+                g.gdg_nama AS dari_cabang_nama 
+            FROM tmsk_hdr h
+            LEFT JOIN tgudang g ON LEFT(h.msk_nomor, 3) = g.gdg_kode
+            WHERE h.msk_kecab = ? AND (h.msk_noterima IS NULL OR h.msk_noterima = '');
         `;
     const [rows] = await pool.query(query, [user.cabang]);
     res.status(200).json({ success: true, data: { items: rows } });
@@ -105,13 +110,11 @@ const save = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Penerimaan berhasil disimpan dengan nomor ${nomorTerima}`,
-        data: { nomor: nomorTerima },
-      });
+    res.status(201).json({
+      success: true,
+      message: `Penerimaan berhasil disimpan dengan nomor ${nomorTerima}`,
+      data: { nomor: nomorTerima },
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     res.status(500).json({ success: false, message: error.message });
