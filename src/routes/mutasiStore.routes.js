@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const mutasiController = require('../controllers/mutasiStore.controller');
-const { authenticateToken } = require('../middleware/auth.middleware');
+const mutasiController = require("../controllers/mutasiStore.controller")
+const { authenticateToken } = require('../middlewares/auth.middleware');
 
 router.use(authenticateToken);
 
