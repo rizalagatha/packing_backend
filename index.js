@@ -54,6 +54,9 @@ app.use('/api/whatsapp', whatsappRoutes);
 const checkerRoutes = require('./src/routes/checker.routes.js');
 app.use('/api/checker', checkerRoutes);
 
+const mutasiStoreRoutes = require('./src/routes/mutasiStore.routes.js');
+app.use('/api/mutasi-store', mutasiStoreRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
