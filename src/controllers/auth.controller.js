@@ -17,12 +17,10 @@ const login = async (req, res) => {
   try {
     const { user_kode, user_password } = req.body;
     if (!user_kode || !user_password) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Kode user dan password harus diisi.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Kode user dan password harus diisi.",
+      });
     }
 
     // 1. Ambil SEMUA baris yang cocok dengan user_kode
@@ -38,10 +36,8 @@ const login = async (req, res) => {
 
     // 2. Verifikasi password menggunakan baris pertama (password-nya sama untuk semua cabang)
     const firstUser = userRows[0];
-    const passwordMatch = await bcrypt.compare(
-      user_password,
-      firstUser.user_password
-    );
+    const passwordMatch = user_password === firstUser.user_password;
+
     if (!passwordMatch) {
       return res
         .status(401)
@@ -117,12 +113,10 @@ const selectBranch = async (req, res) => {
     res.status(200).json({ success: true, data: finalData });
   } catch (error) {
     if (error.name === "TokenExpiredError") {
-      return res
-        .status(401)
-        .json({
-          success: false,
-          message: "Sesi pemilihan cabang kedaluwarsa.",
-        });
+      return res.status(401).json({
+        success: false,
+        message: "Sesi pemilihan cabang kedaluwarsa.",
+      });
     }
     res
       .status(500)
