@@ -7,5 +7,6 @@ const authController = require('../controllers/auth.controller');
 router.post('/login', authController.login);
 
 // (Anda bisa menambahkan rute otentikasi lain di sini, misal: register, logout, dll)
+router.post('/select-branch', authController.selectBranch);
 
 module.exports = router;
