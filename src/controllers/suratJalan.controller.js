@@ -81,13 +81,11 @@ const saveData = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Surat Jalan ${sjNomor} berhasil disimpan.`,
-        data: { nomor: sjNomor },
-      });
+    res.status(201).json({
+      success: true,
+      message: `Surat Jalan ${sjNomor} berhasil disimpan.`,
+      data: { nomor: sjNomor },
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error in saveData:", error);
@@ -101,12 +99,10 @@ const getItemsForLoad = async (req, res) => {
   try {
     const { nomor, gudang } = req.query;
     if (!nomor || !gudang) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: 'Parameter "nomor" dan "gudang" diperlukan.',
-        });
+      return res.status(400).json({
+        success: false,
+        message: 'Parameter "nomor" dan "gudang" diperlukan.',
+      });
     }
 
     let query = "";
@@ -189,31 +185,35 @@ const searchStores = async (req, res) => {
 
 const searchPermintaan = async (req, res) => {
   try {
-    const { term, page = 1, itemsPerPage = 10, storeKode } = req.query;
+    const { term, storeKode, page = 1, itemsPerPage = 10 } = req.query;
     if (!storeKode) {
       return res
         .status(400)
-        .json({ success: false, message: 'Parameter "storeKode" diperlukan.' });
+        .json({ success: false, message: "Store tujuan harus dipilih." });
     }
+
     const offset = (page - 1) * itemsPerPage;
     const searchTerm = `%${term || ""}%`;
     const params = [storeKode, searchTerm, searchTerm, searchTerm, searchTerm];
 
-    const baseQuery = `FROM tmintabarang_hdr h WHERE LEFT(h.mt_nomor, 3) = ? AND h.mt_nomor NOT IN (SELECT sj_mt_nomor FROM tdc_sj_hdr WHERE sj_mt_nomor <> "") AND (h.mt_nomor LIKE ? OR h.mt_tanggal LIKE ? OR h.mt_otomatis LIKE ? OR h.mt_ket LIKE ?)`;
+    const baseFrom = `FROM tmintabarang_hdr h WHERE LEFT(h.mt_nomor, 3) = ? AND h.mt_nomor NOT IN (SELECT sj_mt_nomor FROM tdc_sj_hdr WHERE sj_mt_nomor <> "")`;
+    const searchWhere = `AND (h.mt_nomor LIKE ? OR h.mt_tanggal LIKE ? OR h.mt_otomatis LIKE ? OR h.mt_ket LIKE ?)`;
 
     const [[{ total }]] = await pool.query(
-      `SELECT COUNT(*) AS total ${baseQuery}`,
+      `SELECT COUNT(*) AS total ${baseFrom} ${searchWhere}`,
       params
     );
-    const [items] = await pool.query(
-      `SELECT h.mt_nomor AS nomor, h.mt_tanggal AS tanggal, h.mt_otomatis AS otomatis, h.mt_ket AS keterangan ${baseQuery} ORDER BY h.date_create DESC LIMIT ? OFFSET ?;`,
-      [...params, parseInt(itemsPerPage), parseInt(offset)]
-    );
+
+    const dataQuery = `SELECT h.mt_nomor AS nomor, h.mt_tanggal AS tanggal, h.mt_otomatis AS otomatis, h.mt_ket AS keterangan ${baseFrom} ${searchWhere} ORDER BY h.date_create DESC LIMIT ? OFFSET ?;`;
+    const dataParams = [...params, parseInt(itemsPerPage), parseInt(offset)];
+    const [items] = await pool.query(dataQuery, dataParams);
 
     res.status(200).json({ success: true, data: { items, total } });
   } catch (error) {
     console.error("Error in searchPermintaan:", error);
-    res.status(500).json({ success: false, message: error.message });
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mencari permintaan." });
   }
 };
 
@@ -270,12 +270,10 @@ const getItemsFromPacking = async (req, res) => {
     const [items] = await pool.query(query, [gudang, packNomor]);
 
     if (items.length === 0) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "Nomor Packing tidak ditemukan atau tidak memiliki item.",
-        });
+      return res.status(404).json({
+        success: false,
+        message: "Nomor Packing tidak ditemukan atau tidak memiliki item.",
+      });
     }
 
     res.status(200).json({ success: true, data: items });
@@ -288,15 +286,20 @@ const getItemsFromPacking = async (req, res) => {
 };
 
 const getSuratJalanHistory = async (req, res) => {
-    try {
-        const { cabang: userCabang } = req.user;
-        const { startDate, endDate } = req.query; // Menerima filter tanggal
+  try {
+    const { cabang: userCabang } = req.user;
+    const { startDate, endDate } = req.query; // Menerima filter tanggal
 
-        if (!startDate || !endDate) {
-            return res.status(400).json({ success: false, message: 'Filter tanggal (startDate dan endDate) diperlukan.' });
-        }
+    if (!startDate || !endDate) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Filter tanggal (startDate dan endDate) diperlukan.",
+        });
+    }
 
-        const query = `
+    const query = `
             SELECT 
                 h.sj_nomor AS nomor,
                 h.sj_tanggal AS tanggal,
@@ -311,14 +314,18 @@ const getSuratJalanHistory = async (req, res) => {
                 AND h.sj_tanggal BETWEEN ? AND ?
             ORDER BY h.sj_tanggal DESC, h.sj_nomor DESC;
         `;
-        
-        const [rows] = await pool.query(query, [userCabang, startDate, endDate]);
-        res.status(200).json({ success: true, data: rows });
 
-    } catch (error) {
-        console.error('Error in getSuratJalanHistory:', error);
-        res.status(500).json({ success: false, message: 'Gagal mengambil riwayat Surat Jalan.' });
-    }
+    const [rows] = await pool.query(query, [userCabang, startDate, endDate]);
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error in getSuratJalanHistory:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Gagal mengambil riwayat Surat Jalan.",
+      });
+  }
 };
 
 module.exports = {

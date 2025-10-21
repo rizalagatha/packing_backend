@@ -15,7 +15,7 @@ const generateFinalToken = (user) => {
 
 const login = async (req, res) => {
   try {
-    const { user_kode, user_password } = req.body;
+    const { user_kode, user_password, source = "mobile" } = req.body;
     if (!user_kode || !user_password) {
       return res.status(400).json({
         success: false,
@@ -46,6 +46,20 @@ const login = async (req, res) => {
 
     // 3. Cek jumlah cabang (jumlah baris)
     if (userRows.length > 1) {
+      if (source === "web-cetak") {
+        // Cari data user untuk cabang KDC atau KBS
+        const webUser = userRows.find(
+          (u) => u.user_cab === "KDC" || u.user_cab === "KBS"
+        );
+        const userToUse = webUser || firstUser; // Fallback
+
+        const finalData = generateFinalToken(userToUse);
+        return res.status(200).json({
+          success: true,
+          multiBranch: false,
+          data: finalData,
+        });
+      }
       // --- KASUS MULTI CABANG ---
       const branchCodes = userRows.map((user) => user.user_cab);
       const [gudangRows] = await pool.query(
