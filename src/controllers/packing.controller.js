@@ -262,9 +262,53 @@ const searchPacking = async (req, res) => {
   }
 };
 
+const deletePacking = async (req, res) => {
+  const { nomor } = req.params;
+  let connection;
+
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    // 1. Hapus dari tabel detail (child) terlebih dahulu
+    await connection.query(
+      "DELETE FROM tpacking_dtl WHERE packd_pack_nomor = ?",
+      [nomor]
+    );
+
+    // 2. Hapus dari tabel header (parent)
+    const [deleteHeaderResult] = await connection.query(
+      "DELETE FROM tpacking WHERE pack_nomor = ?",
+      [nomor]
+    );
+
+    // Cek apakah ada data yang benar-benar dihapus
+    if (deleteHeaderResult.affectedRows === 0) {
+      throw new Error("Nomor packing tidak ditemukan.");
+    }
+
+    await connection.commit();
+    res
+      .status(200)
+      .json({ success: true, message: `Packing ${nomor} berhasil dihapus.` });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error in deletePacking:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: error.message || "Gagal menghapus data packing.",
+      });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
 module.exports = {
   createPacking,
   getPackingHistory,
   getPackingDetail,
   searchPacking,
+  deletePacking,
 };
