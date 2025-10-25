@@ -28,6 +28,7 @@ const saveData = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
+    if (!header.gudang?.kode) throw new Error("Gudang harus diisi.");
     if (!header.store?.kode) throw new Error("Store tujuan harus diisi.");
     if (items.length === 0) throw new Error("Detail barang harus diisi.");
 
@@ -290,10 +291,12 @@ const getSuratJalanHistory = async (req, res) => {
     const { startDate, endDate } = req.query; // Menerima filter tanggal
 
     if (!startDate || !endDate) {
-      return res.status(400).json({
-        success: false,
-        message: "Filter tanggal (startDate dan endDate) diperlukan.",
-      });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Filter tanggal (startDate dan endDate) diperlukan.",
+        });
     }
 
     const query = `
@@ -316,10 +319,12 @@ const getSuratJalanHistory = async (req, res) => {
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
     console.error("Error in getSuratJalanHistory:", error);
-    res.status(500).json({
-      success: false,
-      message: "Gagal mengambil riwayat Surat Jalan.",
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Gagal mengambil riwayat Surat Jalan.",
+      });
   }
 };
 
