@@ -3,11 +3,6 @@ const pool = require("../config/database");
 /**
  * Mencari produk berdasarkan barcode dan gudang
  */
-const pool = require("../config/database");
-
-/**
- * Mencari produk berdasarkan barcode dan gudang
- */
 const findByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
