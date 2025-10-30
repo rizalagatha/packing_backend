@@ -1,4 +1,4 @@
-const pool = require('../config/database');
+const pool = require("../config/database");
 
 /**
  * Mencari produk berdasarkan barcode dan gudang
@@ -6,13 +6,18 @@ const pool = require('../config/database');
 const findByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
-    const { gudang, spk_nomor } = req.query;
+    const { gudang, spk_nomor } = req.query; // spk_nomor akan ada jika scan kedua dst.
 
     if (!gudang) {
-      return res.status(400).json({ success: false, message: 'Parameter "gudang" diperlukan.' });
+      return res
+        .status(400)
+        .json({ success: false, message: 'Parameter "gudang" diperlukan.' });
     }
 
-    let query = `
+    // --- LOGIKA BARU UNTUK VALIDASI ---
+
+    // 1. Cek dulu apakah barcode ada & ambil datanya (termasuk stok)
+    const stokQuery = `
       SELECT
         d.brgd_barcode AS barcode, d.brgd_kode AS kode,
         TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
@@ -23,35 +28,69 @@ const findByBarcode = async (req, res) => {
         ), 0) AS stok
       FROM tbarangdc_dtl d
       LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
+      WHERE h.brg_aktif = 0 AND d.brgd_barcode = ?;
     `;
-    const params = [gudang];
+    const [stokRows] = await pool.query(stokQuery, [gudang, barcode]);
 
-    // Jika spk_nomor dikirim, tambahkan validasi ke SPK
-    if (spk_nomor) {
-      query += `
+    if (stokRows.length === 0) {
+      // Jika barcode-nya sendiri tidak ada di database
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Barcode tidak ditemukan atau barang tidak aktif.",
+        });
+    }
+
+    // Jika ini scan pertama (belum ada SPK terkunci), kembalikan data barang.
+    if (!spk_nomor) {
+      return res.status(200).json({ success: true, data: stokRows[0] });
+    }
+
+    // 2. Jika SPK SUDAH TERKUNCI, validasi barcode ke SPK tersebut
+    const spkCheckQuery = `
+        SELECT COUNT(*) as count
+        FROM tbarangdc_dtl d
         JOIN tspk_dc spk ON d.brgd_kode = spk.spkd_kode
-        WHERE spk.spkd_nomor = ? AND d.brgd_barcode = ?
-      `;
-      params.push(spk_nomor, barcode);
-    } else {
-      query += ` WHERE h.brg_aktif = 0 AND d.brgd_barcode = ?`;
-      params.push(barcode);
+        WHERE d.brgd_barcode = ? AND spk.spkd_nomor = ?;
+    `;
+    const [spkCheckRows] = await pool.query(spkCheckQuery, [
+      barcode,
+      spk_nomor,
+    ]);
+
+    if (spkCheckRows[0].count > 0) {
+      // SUKSES: Barcode ada di dalam SPK yang benar.
+      return res.status(200).json({ success: true, data: stokRows[0] });
     }
 
-    const [rows] = await pool.query(query, params);
+    // 3. GAGAL: Barcode tidak ada di SPK ini.
+    // Sekarang, kita cari tahu barcode ini milik SPK mana.
+    const otherSpkQuery = `
+        SELECT spk.spkd_nomor
+        FROM tbarangdc_dtl d
+        JOIN tspk_dc spk ON d.brgd_kode = spk.spkd_kode
+        WHERE d.brgd_barcode = ? AND spk.spkd_nomor <> ?
+        LIMIT 1;
+    `;
+    const [otherSpkRows] = await pool.query(otherSpkQuery, [
+      barcode,
+      spk_nomor,
+    ]);
 
-    if (rows.length === 0) {
-      let message = spk_nomor 
-        ? `Barcode tidak ditemukan di dalam SPK ${spk_nomor}.`
-        : 'Barcode tidak ditemukan atau barang tidak aktif.';
-      return res.status(404).json({ success: false, message: message });
+    let errorMessage = `Barcode tidak ditemukan di dalam SPK ${spk_nomor}.`;
+    if (otherSpkRows.length > 0) {
+      // Jika kita menemukan SPK lain, berikan pesan error spesifik
+      errorMessage = `Peringatan: Barang ini milik SPK yang berbeda (${otherSpkRows[0].spkd_nomor}).`;
     }
 
-    res.status(200).json({ success: true, data: rows[0] });
-
+    // Kembalikan error 409 (Conflict)
+    return res.status(409).json({ success: false, message: errorMessage });
   } catch (error) {
-    console.error('Error saat mencari barcode:', error);
-    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server.' });
+    console.error("Error saat mencari barcode:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Terjadi kesalahan pada server." });
   }
 };
 
