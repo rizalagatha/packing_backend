@@ -294,11 +294,70 @@ const deletePacking = async (req, res) => {
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error in deletePacking:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Gagal menghapus data packing.",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+const updatePacking = async (req, res) => {
+  const { nomor } = req.params;
+  const { items } = req.body; // Menerima daftar item baru
+  const user = req.user;
+  let connection;
+
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    // Validasi: Pastikan setidaknya ada 1 item
+    if (!items || items.length === 0) {
+      throw new Error("Daftar item tidak boleh kosong.");
+    }
+
+    // 1. Hapus semua detail packing yang lama
+    await connection.query(
+      "DELETE FROM tpacking_dtl WHERE packd_pack_nomor = ?",
+      [nomor]
+    );
+
+    // 2. Masukkan kembali item yang sudah dikoreksi
+    const itemInsertQuery = `
+            INSERT INTO tpacking_dtl (packd_pack_nomor, packd_barcode, packd_qty, brg_kaosan, size) 
+            VALUES ?;
+        `;
+    // Asumsi 'items' adalah array objek lengkap dari frontend
+    const itemValues = items.map((item) => [
+      nomor,
+      item.packd_barcode || item.barcode, // Sesuaikan nama field
+      item.packd_qty || item.qty,
+      item.brg_kaosan || item.nama,
+      item.packd_size || item.ukuran,
+    ]);
+
+    await connection.query(itemInsertQuery, [itemValues]);
+
+    // 3. Update header
+    await connection.query(
+      "UPDATE tpacking SET user_modified = ?, date_modified = NOW() WHERE pack_nomor = ?",
+      [user.kode, nomor]
+    );
+
+    await connection.commit();
+    res
+      .status(200)
+      .json({ success: true, message: `Packing ${nomor} berhasil dikoreksi.` });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error in updatePacking:", error);
     res
       .status(500)
       .json({
         success: false,
-        message: error.message || "Gagal menghapus data packing.",
+        message: error.message || "Gagal mengoreksi data.",
       });
   } finally {
     if (connection) connection.release();
@@ -311,4 +370,5 @@ module.exports = {
   getPackingDetail,
   searchPacking,
   deletePacking,
+  updatePacking,
 };

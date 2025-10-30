@@ -14,6 +14,8 @@ router.get('/history', authenticateToken, packingController.getPackingHistory);
 
 router.get('/search', authenticateToken, packingController.searchPacking);
 
+router.put('/:nomor', authenticateToken, packingController.updatePacking);
+
 router.delete('/:nomor', authenticateToken, packingController.deletePacking);
 
 router.get('/:nomor', authenticateToken, packingController.getPackingDetail);
