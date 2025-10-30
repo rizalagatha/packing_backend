@@ -1,8 +1,5 @@
 const pool = require("../config/database");
 
-/**
- * Mencari produk berdasarkan barcode dan gudang
- */
 const findByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
@@ -19,7 +16,7 @@ const findByBarcode = async (req, res) => {
     console.log("   🏢 Gudang:", gudang);
     console.log("   📋 SPK Nomor:", spk_nomor || "TIDAK ADA");
 
-    // 1. Cek dulu apakah barcode ada & ambil datanya (termasuk stok)
+    // 1. Cek barcode dan ambil data
     const stokQuery = `
       SELECT
         d.brgd_barcode AS barcode, 
@@ -48,23 +45,43 @@ const findByBarcode = async (req, res) => {
       });
     }
 
-    console.log("   ✅ Barcode ditemukan:", stokRows[0]);
+    const product = stokRows[0];
+    console.log("   ✅ Barcode ditemukan:", product);
 
-    // Jika ini scan pertama (belum ada SPK terkunci), kembalikan data barang
+    // Jika scan pertama, tidak perlu validasi SPK
     if (!spk_nomor) {
       console.log("   ℹ️  Scan pertama, tidak ada validasi SPK");
-      return res.status(200).json({ success: true, data: stokRows[0] });
+      return res.status(200).json({ success: true, data: product });
     }
 
-    // 2. VALIDASI BARCODE KE SPK - CEK BERDASARKAN BARCODE, BUKAN KODE!
-    console.log("   🔍 Validasi barcode ke SPK...");
+    // 2. DEBUGGING: Lihat semua item di SPK ini
+    console.log("   🔍 Debug: Melihat semua item di SPK", spk_nomor);
+    const debugQuery = `
+      SELECT 
+        spk.spkd_nomor,
+        spk.spkd_kode,
+        spk.spkd_ukuran,
+        d.brgd_barcode
+      FROM tspk_dc spk
+      LEFT JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode 
+                                AND d.brgd_ukuran = spk.spkd_ukuran
+      WHERE spk.spkd_nomor = ?
+      ORDER BY spk.spkd_kode, spk.spkd_ukuran;
+    `;
+    const [debugRows] = await pool.query(debugQuery, [spk_nomor]);
+    console.log("   📊 Isi SPK:", JSON.stringify(debugRows, null, 2));
 
-    // ✅ QUERY YANG BENAR: Join berdasarkan BARCODE dan UKURAN
+    // 3. VALIDASI: Cek apakah barcode ini ADA di SPK
+    console.log("   🔍 Validasi: Cari barcode di SPK...");
     const spkCheckQuery = `
-      SELECT COUNT(*) as count
-      FROM tbarangdc_dtl d
-      JOIN tspk_dc spk ON d.brgd_kode = spk.spkd_kode 
-                       AND d.brgd_ukuran = spk.spkd_ukuran
+      SELECT 
+        spk.spkd_nomor,
+        spk.spkd_kode,
+        spk.spkd_ukuran,
+        d.brgd_barcode
+      FROM tspk_dc spk
+      JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode 
+                           AND d.brgd_ukuran = spk.spkd_ukuran
       WHERE d.brgd_barcode = ? 
         AND spk.spkd_nomor = ?;
     `;
@@ -73,23 +90,26 @@ const findByBarcode = async (req, res) => {
       spk_nomor,
     ]);
 
-    console.log("   📊 Hasil validasi:", spkCheckRows[0]);
+    console.log("   📊 Hasil validasi:", JSON.stringify(spkCheckRows, null, 2));
 
-    if (spkCheckRows[0].count > 0) {
+    if (spkCheckRows.length > 0) {
       // SUKSES: Barcode ada di dalam SPK yang benar
       console.log("   ✅ Barcode valid untuk SPK ini");
-      return res.status(200).json({ success: true, data: stokRows[0] });
+      return res.status(200).json({ success: true, data: product });
     }
 
-    // 3. GAGAL: Barcode tidak ada di SPK ini
+    // 4. GAGAL: Barcode tidak ada di SPK ini
     console.log("   ❌ Barcode TIDAK valid untuk SPK ini");
 
-    // Cari tahu barcode ini milik SPK mana
+    // Cari SPK lain yang punya barcode ini
     const otherSpkQuery = `
-      SELECT spk.spkd_nomor
-      FROM tbarangdc_dtl d
-      JOIN tspk_dc spk ON d.brgd_kode = spk.spkd_kode 
-                       AND d.brgd_ukuran = spk.spkd_ukuran
+      SELECT 
+        spk.spkd_nomor,
+        spk.spkd_kode,
+        spk.spkd_ukuran
+      FROM tspk_dc spk
+      JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode 
+                           AND d.brgd_ukuran = spk.spkd_ukuran
       WHERE d.brgd_barcode = ? 
         AND spk.spkd_nomor <> ?
       LIMIT 1;
@@ -101,8 +121,10 @@ const findByBarcode = async (req, res) => {
 
     let errorMessage = `Barcode tidak ditemukan di dalam SPK ${spk_nomor}.`;
     if (otherSpkRows.length > 0) {
-      errorMessage = `Peringatan: Barang ini milik SPK yang berbeda (${otherSpkRows[0].spkd_nomor}).`;
-      console.log("   📋 Barcode milik SPK:", otherSpkRows[0].spkd_nomor);
+      const otherSpk = otherSpkRows[0];
+      errorMessage = `Peringatan: Barang ini milik SPK yang berbeda (${otherSpk.spkd_nomor}).`;
+      console.log("   📋 Barcode milik SPK:", otherSpk.spkd_nomor);
+      console.log("   📦 Detail:", JSON.stringify(otherSpk, null, 2));
     }
 
     console.log("   🚫 Error:", errorMessage);
@@ -114,10 +136,6 @@ const findByBarcode = async (req, res) => {
       message: "Terjadi kesalahan pada server.",
     });
   }
-};
-
-module.exports = {
-  findByBarcode,
 };
 
 module.exports = {
