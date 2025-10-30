@@ -207,7 +207,15 @@ const getPackingDetail = async (req, res) => {
 
     // 2. Query untuk mengambil semua item (tidak berubah)
     const [itemRows] = await pool.query(
-      "SELECT * FROM tpacking_dtl WHERE packd_pack_nomor = ?",
+      `SELECT 
+                d.packd_barcode, 
+                d.packd_qty, 
+                d.size AS packd_size, 
+                TRIM(CONCAT(b.brg_jeniskaos, ' ', b.brg_tipe, ' ', b.brg_lengan, ' ', b.brg_jeniskain, ' ', b.brg_warna)) AS brg_kaosan
+             FROM tpacking_dtl d
+             LEFT JOIN tbarangdc_dtl bd ON d.packd_barcode = bd.brgd_barcode
+             LEFT JOIN tbarangdc b ON bd.brgd_kode = b.brg_kode
+             WHERE d.packd_pack_nomor = ?`,
       [nomor]
     );
 
@@ -353,12 +361,10 @@ const updatePacking = async (req, res) => {
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error in updatePacking:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: error.message || "Gagal mengoreksi data.",
-      });
+    res.status(500).json({
+      success: false,
+      message: error.message || "Gagal mengoreksi data.",
+    });
   } finally {
     if (connection) connection.release();
   }
