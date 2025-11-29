@@ -34,7 +34,7 @@ const getLowStock = async (req, res) => {
         
         -- Hitung Average Sales (Nominal Rupiah)
         IFNULL((
-            SELECT SUM((invd.invd_harga - invd.invd_diskon) * invd.invd_jumlah) / 3
+            SELECT SUM(invd.invd_jumlah) / 3
             FROM tinv_dtl invd
             JOIN tinv_hdr invh ON invd.invd_inv_nomor = invh.inv_nomor
             WHERE invd.invd_kode = a.brg_kode 
