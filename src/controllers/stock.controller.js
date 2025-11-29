@@ -14,7 +14,6 @@ const getLowStock = async (req, res) => {
     }
 
     let categoryFilter = "";
-    // Filter Kategori Opsional
     if (kategori && kategori !== "ALL") {
       categoryFilter = "AND a.brg_ktgp = ?";
     }
@@ -26,34 +25,44 @@ const getLowStock = async (req, res) => {
         TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna)) AS nama,
         d.brgd_ukuran AS ukuran,
         
-        -- Stok Real
+        -- 1. Stok Real di Toko (Cabang Tujuan)
         IFNULL(s.stok, 0) AS stok_real,
+
+        -- 2. Stok Real di DC (KDC) -> TAMBAHAN BARU
+        IFNULL((
+            SELECT SUM(m.mst_stok_in - m.mst_stok_out)
+            FROM tmasterstok m
+            WHERE m.mst_aktif = 'Y' 
+              AND m.mst_brg_kode = a.brg_kode 
+              AND m.mst_ukuran = d.brgd_ukuran
+              AND m.mst_cab = 'KDC' -- Hardcode KDC sebagai Gudang Pusat
+        ), 0) AS stok_dc,
         
-        -- Buffer stok
+        -- 3. Buffer stok
         IFNULL(d.brgd_min, 0) AS buffer_stok,
         
-        -- Hitung Average Sales (Nominal Rupiah)
+        -- 4. Average Sales (Qty)
         IFNULL((
             SELECT SUM(invd.invd_jumlah) / 3
             FROM tinv_dtl invd
             JOIN tinv_hdr invh ON invd.invd_inv_nomor = invh.inv_nomor
             WHERE invd.invd_kode = a.brg_kode 
               AND invd.invd_ukuran = d.brgd_ukuran
-              AND LEFT(invh.inv_nomor, 3) = ? -- Param 1: Cabang
+              AND LEFT(invh.inv_nomor, 3) = ? 
               AND invh.inv_tanggal >= DATE_SUB(NOW(), INTERVAL 3 MONTH)
         ), 0) AS avg_sales
 
       FROM tbarangdc a
       JOIN tbarangdc_dtl d ON a.brg_kode = d.brgd_kode
 
-      -- Join Stok Real
+      -- Join Stok Real Toko
       LEFT JOIN (
         SELECT 
             m.mst_brg_kode, 
             m.mst_ukuran,
             SUM(m.mst_stok_in - m.mst_stok_out) as stok
         FROM tmasterstok m
-        WHERE m.mst_aktif = 'Y' AND m.mst_tanggal <= ? AND m.mst_cab = ? -- Param 2 & 3
+        WHERE m.mst_aktif = 'Y' AND m.mst_tanggal <= ? AND m.mst_cab = ?
         GROUP BY m.mst_brg_kode, m.mst_ukuran
       ) s ON a.brg_kode = s.mst_brg_kode AND d.brgd_ukuran = s.mst_ukuran
 
@@ -62,28 +71,28 @@ const getLowStock = async (req, res) => {
       HAVING stok_real < buffer_stok AND buffer_stok > 0
       
       ORDER BY stok_real ASC, avg_sales DESC
-      LIMIT ?; -- Param Terakhir
+      LIMIT ?;
     `;
 
     const queryParams = [
-      req.query.cabang, // 1. Cabang (untuk avg sales)
-      new Date(), // 2. Tanggal (untuk stok)
-      req.query.cabang, // 3. Cabang (untuk stok)
+      req.query.cabang, // avg_sales
+      new Date(), // stok toko (date)
+      req.query.cabang, // stok toko (cabang)
     ];
 
     if (kategori && kategori !== "ALL") {
-      queryParams.push(kategori); // 4. Kategori (jika ada)
+      queryParams.push(kategori);
     }
 
-    queryParams.push(parseInt(limit)); // 5. Limit
+    queryParams.push(parseInt(limit));
 
     const [rows] = await pool.query(query, queryParams);
 
     const formattedRows = rows.map((item) => ({
       ...item,
-      // Format angka desimal
-      avg_sales: parseFloat(item.avg_sales),
+      avg_sales: parseFloat(item.avg_sales).toFixed(1), // Qty dengan 1 desimal
       stok_real: parseFloat(item.stok_real),
+      stok_dc: parseFloat(item.stok_dc), // Tambahkan ini
       buffer_stok: parseFloat(item.buffer_stok),
     }));
 
