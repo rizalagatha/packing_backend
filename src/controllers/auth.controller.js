@@ -3,12 +3,12 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
 // Fungsi ini akan dipanggil oleh 'login' dan 'selectBranch'
-const generateFinalToken = (user) => {
+const generateFinalToken = (user, cabangNama) => {
   const payload = {
     kode: user.user_kode,
     nama: user.user_nama,
     cabang: user.user_cab,
-    cabang_nama: cabangNama || user.user_cab,
+    cabang_nama: cabangNama || user.user_cab, // Masukkan nama cabang ke payload
   };
   const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "8h" });
   return { token, user: payload };
