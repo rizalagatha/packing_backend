@@ -10,6 +10,15 @@ const getBufferStokItems = async (req, res) => {
     const user = req.user;
     const cab = user.cabang;
 
+    // Ensure cab is valid
+    if (!cab) {
+      throw new Error("Cabang user tidak valid.");
+    }
+
+    // Determine the category filter part directly in JS to keep SQL clean
+    const categoryFilter =
+      cab === "K04" ? 'AND a.brg_ktg <> ""' : 'AND a.brg_ktg = ""';
+
     const query = `
       SELECT 
         y.Kode as kode,
@@ -25,49 +34,68 @@ const getBufferStokItems = async (req, res) => {
       FROM (
         SELECT
           x.Kode, x.Barcode, x.Nama, x.Ukuran, x.StokMinimal, x.StokMaximal,
+          
           /* sudah minta */
           IFNULL((
             SELECT SUM(mtd.mtd_jumlah)
             FROM tmintabarang_hdr mth
             JOIN tmintabarang_dtl mtd ON mtd.mtd_nomor = mth.mt_nomor
-            WHERE mth.mt_closing = 'N' AND mth.mt_cab = ? 
-              AND mtd.mtd_kode = x.Kode AND mtd.mtd_ukuran = x.Ukuran
+            WHERE mth.mt_closing = 'N' 
+              AND mth.mt_cab = ? 
+              AND mtd.mtd_kode = x.Kode 
+              AND mtd.mtd_ukuran = x.Ukuran
               AND mth.mt_nomor NOT IN (SELECT sj_mt_nomor FROM tdc_sj_hdr WHERE sj_mt_nomor <> '')
           ), 0) AS sudahminta,
-          /* stok DC (ini seharusnya stok store kan? Tapi query referensi ambil stok user.cabang, jadi benar) */
+
+          /* stok DC */
           IFNULL((
-            SELECT SUM(mst_stok_in - mst_stok_out) FROM tmasterstok
-            WHERE mst_aktif = 'Y' AND mst_cab = ? AND mst_brg_kode = x.Kode AND mst_ukuran = x.Ukuran
+            SELECT SUM(mst_stok_in - mst_stok_out) 
+            FROM tmasterstok
+            WHERE mst_aktif = 'Y' 
+              AND mst_cab = ? 
+              AND mst_brg_kode = x.Kode 
+              AND mst_ukuran = x.Ukuran
           ), 0) AS Stok,
+
           /* SJ belum diterima */
           IFNULL((
-            SELECT SUM(sjd_jumlah) FROM tdc_sj_hdr sjh
+            SELECT SUM(sjd.sjd_jumlah) 
+            FROM tdc_sj_hdr sjh
             LEFT JOIN tdc_sj_dtl sjd ON sjd.sjd_nomor = sjh.sj_nomor
-            WHERE sjh.sj_kecab = ? AND sjh.sj_noterima = '' AND sjh.sj_mt_nomor = ''
-              AND sjd.sjd_kode = x.Kode AND sjd.sjd_ukuran = x.Ukuran
+            WHERE sjh.sj_kecab = ? 
+              AND sjh.sj_noterima = '' 
+              AND sjh.sj_mt_nomor = ''
+              AND sjd.sjd_kode = x.Kode 
+              AND sjd.sjd_ukuran = x.Ukuran
           ), 0) AS sj
+
         FROM (
           SELECT
             a.brg_kode AS Kode,
             TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) AS Nama,
-            b.brgd_ukuran AS Ukuran, b.brgd_barcode AS Barcode,
-            IFNULL(b.brgd_min, 0) AS StokMinimal, IFNULL(b.brgd_max, 0) AS StokMaximal
+            b.brgd_ukuran AS Ukuran, 
+            b.brgd_barcode AS Barcode,
+            IFNULL(b.brgd_min, 0) AS StokMinimal, 
+            IFNULL(b.brgd_max, 0) AS StokMaximal
           FROM tbarangdc a
           JOIN tbarangdc_dtl b ON b.brgd_kode = a.brg_kode
-          WHERE a.brg_aktif = 0 AND a.brg_logstok = "Y" AND b.brgd_min <> 0 AND a.brg_ktgp = "REGULER"
-            ${cab === "K04" ? 'AND a.brg_ktg <> ""' : 'AND a.brg_ktg = ""'}
+          WHERE a.brg_aktif = 0 
+            AND a.brg_logstok = "Y" 
+            AND b.brgd_min <> 0 
+            AND a.brg_ktgp = "REGULER"
+            ${categoryFilter}
         ) x
       ) y
       WHERE (y.StokMaximal - (y.Stok + y.sudahminta + y.sj)) > 0
       ORDER BY y.Nama, y.Ukuran;
     `;
 
+    // Parameters: 1. sudahminta (cab), 2. stok (cab), 3. sj (cab)
     const [rows] = await connection.query(query, [cab, cab, cab]);
 
-    // Format hasil agar seragam dengan frontend
     const items = rows.map((r) => ({
       ...r,
-      jumlah: r.mino, // Default jumlah pesan = saran order (mino)
+      jumlah: r.mino,
     }));
 
     res.status(200).json({ success: true, data: items });
@@ -171,13 +199,11 @@ const save = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Permintaan ${mtNomor} berhasil disimpan.`,
-        data: { nomor: mtNomor },
-      });
+    res.status(201).json({
+      success: true,
+      message: `Permintaan ${mtNomor} berhasil disimpan.`,
+      data: { nomor: mtNomor },
+    });
   } catch (error) {
     await connection.rollback();
     console.error("Save Minta Barang Error:", error);
