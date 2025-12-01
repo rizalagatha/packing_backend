@@ -48,7 +48,7 @@ const searchSj = async (req, res) => {
 const loadInitialData = async (req, res) => {
   try {
     const { nomorSj } = req.params;
-    const headerQuery = `SELECT h.sj_nomor, h.sj_tanggal, h.sj_mt_nomor, h.sj_ket AS keterangan, LEFT(h.sj_nomor, 3) AS gudang_asal_kode, g_asal.gdg_nama AS gudang_asal_nama FROM tdc_sj_hdr h LEFT JOIN tgudang g_asal ON g_asal.gdg_kode = LEFT(h.sj_nomor, 3) WHERE h.sj_nomor = ?;`;
+    const headerQuery = `SELECT h.sj_nomor, h.sj_tanggal, h.sj_mt_nomor, h.sj_ket AS keterangan, h.sj_cab AS gudang_asal_kode, g_asal.gdg_nama AS gudang_asal_nama FROM tdc_sj_hdr h LEFT JOIN tgudang g_asal ON g_asal.gdg_kode = h.sj_cab WHERE h.sj_nomor = ?;`;
     const [headerRows] = await pool.query(headerQuery, [nomorSj]);
     if (headerRows.length === 0)
       throw new Error("Data Surat Jalan tidak ditemukan.");
@@ -85,8 +85,15 @@ const saveData = async (req, res) => {
     const idrec = `${user.cabang}TJ${timestamp}`;
 
     await connection.query(
-      `INSERT INTO ttrm_sj_hdr (tj_idrec, tj_nomor, tj_tanggal, tj_mt_nomor, user_create, date_create) VALUES (?, ?, ?, ?, ?, NOW());`,
-      [idrec, tjNomor, header.tanggalTerima, header.nomorMinta, user.kode]
+      `INSERT INTO ttrm_sj_hdr (tj_idrec, tj_nomor, tj_tanggal, tj_mt_nomor, tj_cab, user_create, date_create) VALUES (?, ?, ?, ?, ?, ?, NOW());`,
+      [
+        idrec,
+        tjNomor,
+        header.tanggalTerima,
+        header.nomorMinta,
+        user.cabang,
+        user.kode,
+      ]
     );
 
     const detailValues = items
@@ -247,7 +254,7 @@ const loadPendingSj = async (req, res) => {
     const pendingData = rows[0];
     // Muat juga data header SJ asli untuk kelengkapan info
     const [sjHeaderRows] = await pool.query(
-      `SELECT h.sj_nomor, h.sj_tanggal, h.sj_mt_nomor, h.sj_ket AS keterangan, LEFT(h.sj_nomor, 3) AS gudang_asal_kode, g_asal.gdg_nama AS gudang_asal_nama FROM tdc_sj_hdr h LEFT JOIN tgudang g_asal ON g_asal.gdg_kode = LEFT(h.sj_nomor, 3) WHERE h.sj_nomor = ?;`,
+      `SELECT h.sj_nomor, h.sj_tanggal, h.sj_mt_nomor, h.sj_ket AS keterangan, h.sj_cab AS gudang_asal_kode, g_asal.gdg_nama AS gudang_asal_nama FROM tdc_sj_hdr h LEFT JOIN tgudang g_asal ON g_asal.gdg_kode = h.sj_cab WHERE h.sj_nomor = ?;`,
       [pendingData.sj_nomor]
     );
 

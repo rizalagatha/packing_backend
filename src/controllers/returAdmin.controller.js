@@ -16,20 +16,19 @@ const searchPendingRetur = async (req, res) => {
     const { status = "OPEN" } = req.query;
 
     let query = `
-            SELECT 
-                pending_nomor AS nomor, 
-                sj_nomor, 
-                tj_nomor, 
-                tanggal_pending AS tanggal,
-                status
-            FROM tpendingsj 
-            WHERE 
-                kode_store = ? 
-                AND status = ?
-        `;
+      SELECT 
+        pending_nomor AS nomor, 
+        sj_nomor, 
+        tj_nomor, 
+        tanggal_pending AS tanggal,
+        status
+      FROM tpendingsj 
+      WHERE 
+        kode_store = ? 
+        AND status = ?
+    `;
     const params = [user.cabang, status];
 
-    // --- INI PERBAIKAN UTAMANYA ---
     // Jika yang dicari adalah yang sudah 'CLOSE', tambahkan filter tambahan
     // untuk memastikan ia belum pernah dibuatkan returnya.
     if (status === "CLOSE") {
@@ -73,10 +72,10 @@ const loadSelisihData = async (req, res) => {
     const sjHeaderQuery = `
         SELECT 
             h.*, 
-            LEFT(h.sj_nomor, 3) AS gudang_asal_kode,
+            h.sj_cab AS gudang_asal_kode,
             g.gdg_nama AS gudang_asal_nama 
         FROM tdc_sj_hdr h
-        LEFT JOIN tgudang g ON LEFT(h.sj_nomor, 3) = g.gdg_kode
+        LEFT JOIN tgudang g ON h.sj_cab = g.gdg_kode
         WHERE h.sj_nomor = ?
     `;
     const [sjHeaderRows] = await pool.query(sjHeaderQuery, [rows[0].sj_nomor]);
@@ -108,15 +107,15 @@ const saveRetur = async (req, res) => {
     const timestamp = format(new Date(), "yyyyMMddHHmmssSSS");
     const idrec = `${user.cabang}RB${timestamp}`;
 
-    // --- PERBAIKAN DI SINI ---
     // `rb_noterima` dikosongkan (tidak diisi).
     await connection.query(
-      `INSERT INTO trbdc_hdr (rb_idrec, rb_nomor, rb_tanggal, rb_kecab, rb_ket, user_create, date_create) VALUES (?, ?, ?, ?, ?, ?, NOW());`,
+      `INSERT INTO trbdc_hdr (rb_idrec, rb_nomor, rb_tanggal, rb_kecab, rb_cab, rb_ket, user_create, date_create) VALUES (?, ?, ?, ?, ?, ?, ?, NOW());`,
       [
         idrec,
         rbNomor,
         header.tanggalRetur,
         header.gudangTujuan,
+        user.cabang,
         header.keterangan,
         user.kode,
       ]

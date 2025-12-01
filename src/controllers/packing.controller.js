@@ -187,14 +187,14 @@ const getPackingDetail = async (req, res) => {
     // 1. Query untuk mengambil data header, sekarang digabung dengan tspk untuk dapat NAMA SPK
     const [headerRows] = await pool.query(
       `SELECT 
-                p.pack_nomor, 
-                p.pack_tanggal, 
-                p.pack_spk_nomor, 
-                spk.spk_nama AS pack_nama_spk,
-                spk.spk_nomor_po AS nomor_po
-             FROM tpacking p
-             LEFT JOIN tspk spk ON p.pack_spk_nomor = spk.spk_nomor
-             WHERE p.pack_nomor = ?`,
+          p.pack_nomor, 
+          p.pack_tanggal, 
+          p.pack_spk_nomor, 
+          spk.spk_nama AS pack_nama_spk,
+          spk.spk_nomor_po AS nomor_po
+       FROM tpacking p
+       LEFT JOIN tspk spk ON p.pack_spk_nomor = spk.spk_nomor
+       WHERE p.pack_nomor = ?`,
       [nomor]
     );
 

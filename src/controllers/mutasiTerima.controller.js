@@ -6,15 +6,15 @@ const searchKirim = async (req, res) => {
   try {
     const user = req.user;
     const query = `
-            SELECT 
-                h.msk_nomor as nomor, 
-                h.msk_tanggal as tanggal, 
-                LEFT(h.msk_nomor, 3) as dari_cabang,
-                g.gdg_nama AS dari_cabang_nama 
-            FROM tmsk_hdr h
-            LEFT JOIN tgudang g ON LEFT(h.msk_nomor, 3) = g.gdg_kode
-            WHERE h.msk_kecab = ? AND (h.msk_noterima IS NULL OR h.msk_noterima = '');
-        `;
+      SELECT 
+        h.msk_nomor as nomor, 
+        h.msk_tanggal as tanggal, 
+        h.msk_cab as dari_cabang,
+        g.gdg_nama AS dari_cabang_nama 
+      FROM tmsk_hdr h
+      LEFT JOIN tgudang g ON h.msk_cab = g.gdg_kode
+      WHERE h.msk_kecab = ? AND (h.msk_noterima IS NULL OR h.msk_noterima = '');
+    `;
     const [rows] = await pool.query(query, [user.cabang]);
     res.status(200).json({ success: true, data: { items: rows } });
   } catch (error) {
@@ -29,22 +29,22 @@ const loadFromKirim = async (req, res) => {
   try {
     const { nomorKirim } = req.params;
     const query = `
-            SELECT 
-                h.msk_nomor, h.msk_tanggal, h.msk_ket,
-                LEFT(h.msk_nomor, 3) AS gudangAsalKode,
-                g.gdg_nama AS gudangAsalNama,
-                d.mskd_kode AS kode,
-                b.brgd_barcode AS barcode,
-                TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS nama,
-                d.mskd_ukuran AS ukuran,
-                d.mskd_jumlah AS jumlahKirim
-            FROM tmsk_hdr h
-            INNER JOIN tmsk_dtl d ON d.mskd_nomor = h.msk_nomor
-            LEFT JOIN tbarangdc a ON a.brg_kode = d.mskd_kode
-            LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = d.mskd_kode AND b.brgd_ukuran = d.mskd_ukuran
-            LEFT JOIN tgudang g ON g.gdg_kode = LEFT(h.msk_nomor, 3)
-            WHERE h.msk_nomor = ?;
-        `;
+      SELECT 
+        h.msk_nomor, h.msk_tanggal, h.msk_ket,
+        h.msk_cab AS gudangAsalKode,
+        g.gdg_nama AS gudangAsalNama,
+        d.mskd_kode AS kode,
+        b.brgd_barcode AS barcode,
+        TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS nama,
+        d.mskd_ukuran AS ukuran,
+        d.mskd_jumlah AS jumlahKirim
+      FROM tmsk_hdr h
+      INNER JOIN tmsk_dtl d ON d.mskd_nomor = h.msk_nomor
+      LEFT JOIN tbarangdc a ON a.brg_kode = d.mskd_kode
+      LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = d.mskd_kode AND b.brgd_ukuran = d.mskd_ukuran
+      LEFT JOIN tgudang g ON g.gdg_kode = h.msk_cab
+      WHERE h.msk_nomor = ?;
+    `;
     const [rows] = await pool.query(query, [nomorKirim]);
     if (rows.length === 0)
       throw new Error("Dokumen pengiriman tidak ditemukan.");
@@ -89,8 +89,13 @@ const save = async (req, res) => {
     const nomorTerima = `${prefix}${nextNum}`;
 
     await connection.query(
-      `INSERT INTO tmst_hdr (mst_nomor, mst_tanggal, user_create, date_create) VALUES (?, ?, ?, NOW());`,
-      [nomorTerima, header.tanggalTerima, user.kode]
+      `INSERT INTO tmst_hdr (mst_nomor, mst_tanggal, mst_cab, user_create, date_create) VALUES (?, ?, ?, ?, NOW());`,
+      [
+        nomorTerima,
+        header.tanggalTerima,
+        user.cabang, 
+        user.kode,
+      ]
     );
 
     await connection.query(

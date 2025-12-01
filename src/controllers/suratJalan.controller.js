@@ -38,11 +38,12 @@ const saveData = async (req, res) => {
       sjNomor = await generateNewSjNumber(header.gudang.kode, header.tanggal);
       const nomorPermintaan = header.permintaan || "";
       await connection.query(
-        `INSERT INTO tdc_sj_hdr (sj_nomor, sj_tanggal, sj_kecab, sj_mt_nomor, sj_ket, user_create, date_create) VALUES (?, ?, ?, ?, ?, ?, NOW());`,
+        `INSERT INTO tdc_sj_hdr (sj_nomor, sj_tanggal, sj_kecab, sj_cab, sj_mt_nomor, sj_ket, user_create, date_create) VALUES (?, ?, ?, ?, ?, ?, ?, NOW());`,
         [
           sjNomor,
           header.tanggal,
           header.store.kode,
+          user.cabang,
           nomorPermintaan,
           header.keterangan,
           user.kode,
@@ -125,7 +126,7 @@ const loadForEdit = async (req, res) => {
     const { nomor } = req.params;
     const user = req.user;
 
-    const headerQuery = `SELECT h.sj_nomor AS nomor, h.sj_tanggal AS tanggal, h.sj_ket AS keterangan, h.sj_mt_nomor AS permintaan, LEFT(h.sj_nomor, 3) AS gudang_kode, g.gdg_nama AS gudang_nama, h.sj_kecab AS store_kode, s.gdg_nama AS store_nama FROM tdc_sj_hdr h LEFT JOIN tgudang g ON g.gdg_kode = LEFT(h.sj_nomor, 3) LEFT JOIN tgudang s ON s.gdg_kode = h.sj_kecab WHERE h.sj_nomor = ?;`;
+    const headerQuery = `SELECT h.sj_nomor AS nomor, h.sj_tanggal AS tanggal, h.sj_ket AS keterangan, h.sj_mt_nomor AS permintaan, h.sj_cab AS gudang_kode, g.gdg_nama AS gudang_nama, h.sj_kecab AS store_kode, s.gdg_nama AS store_nama FROM tdc_sj_hdr h LEFT JOIN tgudang g ON g.gdg_kode = h.sj_cab LEFT JOIN tgudang s ON s.gdg_kode = h.sj_kecab WHERE h.sj_nomor = ?;`;
     const [headerRows] = await pool.query(headerQuery, [nomor]);
     if (headerRows.length === 0) {
       return res
@@ -196,7 +197,7 @@ const searchPermintaan = async (req, res) => {
     const searchTerm = `%${term || ""}%`;
     const params = [storeKode, searchTerm, searchTerm, searchTerm, searchTerm];
 
-    const baseFrom = `FROM tmintabarang_hdr h WHERE LEFT(h.mt_nomor, 3) = ? AND h.mt_nomor NOT IN (SELECT sj_mt_nomor FROM tdc_sj_hdr WHERE sj_mt_nomor <> "")`;
+    const baseFrom = `FROM tmintabarang_hdr h WHERE mt_cab = ? AND h.mt_nomor NOT IN (SELECT sj_mt_nomor FROM tdc_sj_hdr WHERE sj_mt_nomor <> "")`;
     const searchWhere = `AND (h.mt_nomor LIKE ? OR h.mt_tanggal LIKE ? OR h.mt_otomatis LIKE ? OR h.mt_ket LIKE ?)`;
 
     const [[{ total }]] = await pool.query(
@@ -225,14 +226,14 @@ const searchTerimaRb = async (req, res) => {
     const searchTerm = `%${term || ""}%`;
     const params = [user.cabang, searchTerm, searchTerm, searchTerm];
 
-    const baseQuery = `FROM tdcrb_hdr h LEFT JOIN trbdc_hdr r ON r.rb_noterima = h.rb_nomor LEFT JOIN tgudang g ON g.gdg_kode = LEFT(r.rb_nomor, 3) WHERE LEFT(h.rb_nomor, 3) = ? AND (h.rb_nomor LIKE ? OR r.rb_nomor LIKE ? OR g.gdg_nama LIKE ?)`;
+    const baseQuery = `FROM tdcrb_hdr h LEFT JOIN trbdc_hdr r ON r.rb_noterima = h.rb_nomor LEFT JOIN tgudang g ON g.gdg_kode = h.rb_cab WHERE h.rb_cab = ? AND (h.rb_nomor LIKE ? OR r.rb_nomor LIKE ? OR g.gdg_nama LIKE ?)`;
 
     const [[{ total }]] = await pool.query(
       `SELECT COUNT(*) AS total ${baseQuery}`,
       params
     );
     const [items] = await pool.query(
-      `SELECT h.rb_nomor AS nomor, h.rb_tanggal AS tanggal, r.rb_nomor AS no_rb, r.rb_tanggal AS tgl_rb, CONCAT(LEFT(r.rb_nomor, 3), ' - ', g.gdg_nama) AS dari_store ${baseQuery} ORDER BY h.date_create DESC LIMIT ? OFFSET ?;`,
+      `SELECT h.rb_nomor AS nomor, h.rb_tanggal AS tanggal, r.rb_nomor AS no_rb, r.rb_tanggal AS tgl_rb, CONCAT(h.rb_cab, ' - ', g.gdg_nama) AS dari_store ${baseQuery} ORDER BY h.date_create DESC LIMIT ? OFFSET ?;`,
       [...params, parseInt(itemsPerPage), parseInt(offset)]
     );
 
@@ -291,40 +292,36 @@ const getSuratJalanHistory = async (req, res) => {
     const { startDate, endDate } = req.query; // Menerima filter tanggal
 
     if (!startDate || !endDate) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Filter tanggal (startDate dan endDate) diperlukan.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Filter tanggal (startDate dan endDate) diperlukan.",
+      });
     }
 
     const query = `
-            SELECT 
-                h.sj_nomor AS nomor,
-                h.sj_tanggal AS tanggal,
-                h.sj_kecab AS store_kode,
-                g.gdg_nama AS store_nama,
-                (SELECT COUNT(*) FROM tdc_sj_dtl d WHERE d.sjd_nomor = h.sj_nomor) AS jumlah_jenis_item,
-                (SELECT SUM(d.sjd_jumlah) FROM tdc_sj_dtl d WHERE d.sjd_nomor = h.sj_nomor) AS total_qty
-            FROM tdc_sj_hdr h
-            LEFT JOIN tgudang g ON h.sj_kecab = g.gdg_kode
-            WHERE 
-                LEFT(h.sj_nomor, 3) = ? 
-                AND h.sj_tanggal BETWEEN ? AND ?
-            ORDER BY h.sj_tanggal DESC, h.sj_nomor DESC;
-        `;
+      SELECT 
+        h.sj_nomor AS nomor,
+        h.sj_tanggal AS tanggal,
+        h.sj_kecab AS store_kode,
+        g.gdg_nama AS store_nama,
+        (SELECT COUNT(*) FROM tdc_sj_dtl d WHERE d.sjd_nomor = h.sj_nomor) AS jumlah_jenis_item,
+        (SELECT SUM(d.sjd_jumlah) FROM tdc_sj_dtl d WHERE d.sjd_nomor = h.sj_nomor) AS total_qty
+      FROM tdc_sj_hdr h
+      LEFT JOIN tgudang g ON h.sj_kecab = g.gdg_kode
+        WHERE 
+          h.sj_cab = ? 
+          AND h.sj_tanggal BETWEEN ? AND ?
+      ORDER BY h.sj_tanggal DESC, h.sj_nomor DESC;
+    `;
 
     const [rows] = await pool.query(query, [userCabang, startDate, endDate]);
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
     console.error("Error in getSuratJalanHistory:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Gagal mengambil riwayat Surat Jalan.",
-      });
+    res.status(500).json({
+      success: false,
+      message: "Gagal mengambil riwayat Surat Jalan.",
+    });
   }
 };
 

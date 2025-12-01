@@ -30,11 +30,12 @@ const save = async (req, res) => {
     if (isNew) {
       nomorDokumen = await generateNewNomor(user.cabang, header.tanggal);
       await connection.query(
-        `INSERT INTO tmsk_hdr (msk_nomor, msk_tanggal, msk_kecab, msk_ket, user_create, date_create) VALUES (?, ?, ?, ?, ?, NOW());`,
+        `INSERT INTO tmsk_hdr (msk_nomor, msk_tanggal, msk_kecab, msk_cab, msk_ket, user_create, date_create) VALUES (?, ?, ?, ?, ?, ?, NOW());`,
         [
           nomorDokumen,
           header.tanggal,
           header.storeTujuanKode,
+          user.cabang,
           header.keterangan,
           user.kode,
         ]

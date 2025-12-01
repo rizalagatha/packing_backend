@@ -48,7 +48,7 @@ const getLowStock = async (req, res) => {
             JOIN tinv_hdr invh ON invd.invd_inv_nomor = invh.inv_nomor
             WHERE invd.invd_kode = a.brg_kode 
               AND invd.invd_ukuran = d.brgd_ukuran
-              AND LEFT(invh.inv_nomor, 3) = ? 
+              AND invh.inv_cab = ? 
               AND invh.inv_tanggal >= DATE_SUB(NOW(), INTERVAL 3 MONTH)
         ), 0) AS avg_sales
 
