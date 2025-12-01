@@ -65,6 +65,9 @@ app.use('/api/mutasi-terima', mutasiTerimaRoutes);
 const stockRoutes = require('./src/routes/stock.routes.js');
 app.use('/api/stock', stockRoutes);
 
+const mintaBarangRoutes = require('./src/routes/mintaBarang.routes.js');
+app.use('/api/minta-barang', mintaBarangRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
