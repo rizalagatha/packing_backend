@@ -8,6 +8,7 @@ const generateFinalToken = (user) => {
     kode: user.user_kode,
     nama: user.user_nama,
     cabang: user.user_cab,
+    cabang_nama: cabangNama || user.user_cab,
   };
   const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "8h" });
   return { token, user: payload };
@@ -53,7 +54,14 @@ const login = async (req, res) => {
         );
         const userToUse = webUser || firstUser; // Fallback
 
-        const finalData = generateFinalToken(userToUse);
+        const [gudangRows] = await pool.query(
+          "SELECT gdg_nama FROM tgudang WHERE gdg_kode = ?",
+          [userToUse.user_cab]
+        );
+        const cabangNama =
+          gudangRows.length > 0 ? gudangRows[0].gdg_nama : userToUse.user_cab;
+
+        const finalData = generateFinalToken(userToUse, cabangNama);
         return res.status(200).json({
           success: true,
           multiBranch: false,
@@ -92,7 +100,14 @@ const login = async (req, res) => {
       });
     } else {
       // --- KASUS CABANG TUNGGAL ---
-      const finalData = generateFinalToken(firstUser);
+      const [gudangRows] = await pool.query(
+        "SELECT gdg_nama FROM tgudang WHERE gdg_kode = ?",
+        [firstUser.user_cab]
+      );
+      const cabangNama =
+        gudangRows.length > 0 ? gudangRows[0].gdg_nama : firstUser.user_cab;
+
+      const finalData = generateFinalToken(firstUser, cabangNama);
       res.status(200).json({
         success: true,
         multiBranch: false,
