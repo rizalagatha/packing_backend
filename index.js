@@ -68,6 +68,9 @@ app.use('/api/stock', stockRoutes);
 const mintaBarangRoutes = require('./src/routes/mintaBarang.routes.js');
 app.use('/api/minta-barang', mintaBarangRoutes);
 
+const penjualanRoutes = require('./src/routes/penjualan.routes.js');
+app.use('/api/penjualan', penjualanRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
