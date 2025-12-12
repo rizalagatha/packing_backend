@@ -4,7 +4,7 @@ const { format } = require("date-fns");
 // --- Helper Functions ---
 const toSqlDate = (date) => format(new Date(date), "yyyy-MM-dd");
 const toSqlDateTime = (date) => format(new Date(date), "yyyy-MM-dd HH:mm:ss");
-const applyRounding = (num) => Math.round(num); // Sederhana
+const applyRounding = (num) => Math.round(num);
 
 const generateNewInvNumber = async (gudang, tanggal) => {
   const date = new Date(tanggal);
@@ -25,7 +25,6 @@ const generateNewSetorNumber = async (connection, cabang, tanggal) => {
 
 // --- API Functions ---
 
-// 1. Cari Produk by Barcode (Dengan info Harga Bertingkat)
 const findProductByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
@@ -37,10 +36,10 @@ const findProductByBarcode = async (req, res) => {
                 d.brgd_kode AS kode,
                 TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
                 d.brgd_ukuran AS ukuran,
-                d.brgd_harga AS harga,   -- Harga Level 1
-                d.brgd_hrg2 AS harga2,   -- Harga Level 2
-                d.brgd_hrg3 AS harga3,   -- Harga Level 3 / 5
-                d.brgd_hrg4 AS harga4,   -- Harga Level 4
+                d.brgd_harga AS harga,
+                d.brgd_hrg2 AS harga2,
+                d.brgd_hrg3 AS harga3,
+                d.brgd_hrg4 AS harga4,
                 h.brg_ktgp AS kategori,
                 IFNULL((
                     SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
@@ -64,11 +63,10 @@ const findProductByBarcode = async (req, res) => {
   }
 };
 
-// 2. Get Default Customer (RETAIL)
 const getDefaultCustomer = async (req, res) => {
   try {
     const { cabang } = req.user;
-    // --- PERBAIKAN: Gunakan ALIAS (AS kode, AS nama) ---
+    // --- PERBAIKAN 1: Gunakan ALIAS agar properti di frontend terbaca ---
     const query = `
             SELECT 
                 c.cus_kode AS kode, 
@@ -89,7 +87,37 @@ const getDefaultCustomer = async (req, res) => {
   }
 };
 
-// 3. Simpan Penjualan (Simplified Version of Invoice Controller)
+const searchRekening = async (req, res) => {
+  try {
+    const { term } = req.query;
+    const { cabang } = req.user;
+    const searchTerm = `%${term || ""}%`;
+
+    const query = `
+            SELECT 
+                rek_kode AS kode,
+                rek_nama AS nama,
+                rek_rekening AS rekening
+            FROM finance.trekening 
+            WHERE rek_kaosan LIKE ? 
+              AND (rek_kode LIKE ? OR rek_nama LIKE ?)
+            LIMIT 20;
+        `;
+
+    const [rows] = await pool.query(query, [
+      `%${cabang}%`,
+      searchTerm,
+      searchTerm,
+    ]);
+    res.status(200).json({ success: true, data: { items: rows } });
+  } catch (error) {
+    console.error("Error searchRekening:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mencari rekening." });
+  }
+};
+
 const savePenjualan = async (req, res) => {
   const { header, items, payment, totals } = req.body;
   const user = req.user;
@@ -99,28 +127,31 @@ const savePenjualan = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    // --- A. Generate Nomor ---
+    // Validasi Customer
+    // Fallback: Jika header.customer.kode tidak ada, coba cek properti lain
+    const customerKode = header.customer?.kode || header.customer?.cus_kode;
+    if (!customerKode) {
+      throw new Error(
+        "Data customer tidak valid (Kode kosong). Silakan reload halaman."
+      );
+    }
+
     const invNomor = await generateNewInvNumber(user.cabang, header.tanggal);
     const idrec = `${user.cabang}INV${format(new Date(), "yyyyMMddHHmmssSSS")}`;
-    const piutangNomor = `${header.customer.kode}${invNomor}`;
+    const piutangNomor = `${customerKode}${invNomor}`;
 
-    // --- B. Hitung Values ---
     const subTotal = applyRounding(totals.subTotal);
     const totalDiskon = applyRounding(totals.totalDiskonFaktur || 0);
     const grandTotal = applyRounding(totals.grandTotal);
 
-    // Pembayaran
     const bayarTunai = applyRounding(Number(payment.tunai || 0));
     const bayarTransfer = applyRounding(Number(payment.transfer?.nominal || 0));
-    const totalBayar = bayarTunai + bayarTransfer; // Anggap mobile cuma support Tunai & Transfer dulu
+    const totalBayar = bayarTunai + bayarTransfer;
 
-    // Kembalian
     const kembalian = Math.max(totalBayar - grandTotal, 0);
-
-    // Piutang (Jika ada sisa)
     const sisaPiutang = Math.max(grandTotal - totalBayar, 0);
 
-    // --- C. Insert Header (tinv_hdr) ---
+    // --- Insert tinv_hdr ---
     await connection.query(
       `INSERT INTO tinv_hdr (
                 inv_idrec, inv_nomor, inv_tanggal, inv_cab, 
@@ -134,12 +165,12 @@ const savePenjualan = async (req, res) => {
         invNomor,
         toSqlDate(header.tanggal),
         user.cabang,
-        header.customer.kode,
+        customerKode,
         header.customer.level_kode || "1",
-        header.keterangan || "Mobile Sales",
+        header.keterangan || "Penjualan Mobile",
         user.kode,
         totalDiskon,
-        0, // Biaya kirim 0 dulu
+        0,
         totalBayar,
         bayarTunai,
         bayarTransfer,
@@ -148,7 +179,7 @@ const savePenjualan = async (req, res) => {
       ]
     );
 
-    // --- D. Insert Detail (tinv_dtl) ---
+    // --- Insert tinv_dtl ---
     const detailValues = items.map((item, index) => {
       const invdIdrec = `${invNomor.replace(/\./g, "")}${String(
         index + 1
@@ -163,11 +194,11 @@ const savePenjualan = async (req, res) => {
         item.ukuran,
         item.jumlah,
         0,
-        item.jumlah, // mstpesan=0, mststok=jumlah (karena stok fisik langsung)
+        item.jumlah,
         harga,
         0,
         0,
-        diskonRp, // hpp=0 (biar backend lain yg handle), disc%=0
+        diskonRp,
         "",
         index + 1,
       ];
@@ -180,22 +211,21 @@ const savePenjualan = async (req, res) => {
       );
     }
 
-    // --- E. Insert Piutang (tpiutang_hdr & dtl) ---
-    // Mekanismenya: Buat piutang full dulu, lalu bayar lunas/sebagian di detail
+    // --- Insert tpiutang ---
     if (grandTotal > 0) {
       await connection.query(
         `INSERT INTO tpiutang_hdr (ph_nomor, ph_tanggal, ph_cus_kode, ph_inv_nomor, ph_top, ph_nominal) VALUES (?, ?, ?, ?, ?, ?)`,
         [
           piutangNomor,
           toSqlDate(header.tanggal),
-          header.customer.kode,
+          customerKode,
           invNomor,
           0,
           sisaPiutang,
         ]
       );
 
-      // Detail 1: Tagihan (Debet)
+      // Detail Tagihan
       const dtlTagihan = [
         `${user.cabang}INV${format(new Date(), "yyyyMMddHHmmssSSS")}`,
         piutangNomor,
@@ -210,9 +240,7 @@ const savePenjualan = async (req, res) => {
         [dtlTagihan]
       );
 
-      // Detail 2: Pembayaran Tunai (Kredit)
       if (bayarTunai > 0) {
-        // Di sistem ini tunai bersih (setelah kembalian) yang dicatat sebagai pengurang piutang
         const tunaiBersih = Math.max(bayarTunai - kembalian, 0);
         const dtlTunai = [
           `${user.cabang}CASH${format(new Date(), "yyyyMMddHHmmssSSS")}`,
@@ -229,7 +257,6 @@ const savePenjualan = async (req, res) => {
         );
       }
 
-      // Detail 3: Pembayaran Transfer (Kredit)
       if (bayarTransfer > 0) {
         const dtlTransfer = [
           `${user.cabang}TRF${format(new Date(), "yyyyMMddHHmmssSSS")}`,
@@ -247,17 +274,18 @@ const savePenjualan = async (req, res) => {
       }
     }
 
-    // --- F. Insert Setoran (Jika Transfer) ---
+    // --- Insert tsetor (Jika Transfer) ---
     if (bayarTransfer > 0) {
       const nomorSetor = await generateNewSetorNumber(
         connection,
         user.cabang,
         header.tanggal
       );
-      const idrecSetor = `${user.cabang}SH${format(
-        new Date(),
-        "yyyyMMddHHmmssSSS"
-      )}`;
+
+      const timestampSetor = format(new Date(), "yyyyMMddHHmmssSSS");
+      const idrecSetor = `${user.cabang}SH${timestampSetor}`; // ID Unik Header
+      const idrecSetorDtl = `${user.cabang}SD${timestampSetor}`; // ID Unik Detail
+      const angsurId = `${user.cabang}KS${timestampSetor}`; // ID Angsur (Penting untuk relasi)
 
       // Header Setoran
       await connection.query(
@@ -265,7 +293,7 @@ const savePenjualan = async (req, res) => {
         [
           idrecSetor,
           nomorSetor,
-          header.customer.kode,
+          customerKode,
           toSqlDateTime(header.tanggal),
           bayarTransfer,
           user.kode,
@@ -273,24 +301,28 @@ const savePenjualan = async (req, res) => {
       );
 
       // Detail Setoran
+      // --- PERBAIKAN 2: Tambahkan 'sd_angsur' dan gunakan 'idrecSetorDtl' ---
       await connection.query(
-        `INSERT INTO tsetor_dtl (sd_idrec, sd_sh_nomor, sd_tanggal, sd_inv, sd_bayar, sd_ket, sd_nourut) VALUES (?, ?, ?, ?, ?, 'PEMBAYARAN DARI KASIR MOBILE', 1)`,
+        `INSERT INTO tsetor_dtl (sd_idrec, sd_sh_nomor, sd_tanggal, sd_inv, sd_bayar, sd_ket, sd_angsur, sd_nourut) VALUES (?, ?, ?, ?, ?, 'PEMBAYARAN DARI KASIR MOBILE', ?, 1)`,
         [
-          idrecSetor,
+          idrecSetorDtl, // ID Unik baris detail
           nomorSetor,
           toSqlDateTime(header.tanggal),
           invNomor,
           bayarTransfer,
+          angsurId, // ID Angsur (mengisi kekosongan yang menyebabkan duplicate entry '')
         ]
       );
     }
 
     await connection.commit();
-    res.status(201).json({
-      success: true,
-      message: `Penjualan ${invNomor} berhasil.`,
-      data: { nomor: invNomor },
-    });
+    res
+      .status(201)
+      .json({
+        success: true,
+        message: `Penjualan ${invNomor} berhasil.`,
+        data: { nomor: invNomor },
+      });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error savePenjualan:", error);
@@ -300,44 +332,9 @@ const savePenjualan = async (req, res) => {
   }
 };
 
-// 4. Search Rekening (Untuk Transfer)
-const searchRekening = async (req, res) => {
-  try {
-    const { term } = req.query;
-    const { cabang } = req.user; // Ambil cabang dari user login
-    const searchTerm = `%${term || ""}%`;
-
-    // Pastikan database 'finance' bisa diakses oleh user DB Anda
-    const query = `
-            SELECT 
-                rek_kode AS kode,
-                rek_nama AS nama,
-                rek_rekening AS rekening
-            FROM finance.trekening 
-            WHERE rek_kaosan LIKE ? 
-              AND (rek_kode LIKE ? OR rek_nama LIKE ?)
-            LIMIT 20;
-        `;
-
-    // Filter rek_kaosan menggunakan %CABANG%
-    const [rows] = await pool.query(query, [
-      `%${cabang}%`,
-      searchTerm,
-      searchTerm,
-    ]);
-
-    res.status(200).json({ success: true, data: { items: rows } });
-  } catch (error) {
-    console.error("Error searchRekening:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Gagal mencari rekening." });
-  }
-};
-
 module.exports = {
   findProductByBarcode,
   getDefaultCustomer,
   savePenjualan,
-  searchRekening, // -> Tambahkan export ini
+  searchRekening,
 };
