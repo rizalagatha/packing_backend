@@ -316,13 +316,11 @@ const savePenjualan = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Penjualan ${invNomor} berhasil.`,
-        data: { nomor: invNomor },
-      });
+    res.status(201).json({
+      success: true,
+      message: `Penjualan ${invNomor} berhasil.`,
+      data: { nomor: invNomor },
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error savePenjualan:", error);
@@ -332,9 +330,34 @@ const savePenjualan = async (req, res) => {
   }
 };
 
+// 5. Get Active Promos
+const getActivePromos = async (req, res) => {
+  try {
+    const { tanggal } = req.query;
+    const { cabang } = req.user;
+
+    const query = `
+            SELECT 
+                p.pro_nomor, p.pro_judul, p.pro_totalrp, p.pro_disrp
+            FROM tpromo p
+            INNER JOIN tpromo_cabang c ON c.pc_nomor = p.pro_nomor AND c.pc_cab = ?
+            WHERE p.pro_f1 = "N" -- Promo otomatis/header
+              AND ? BETWEEN p.pro_tanggal1 AND p.pro_tanggal2;
+        `;
+
+    const [rows] = await pool.query(query, [cabang, tanggal]);
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error getActivePromos:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat promo." });
+  }
+};
+
+// Jangan lupa tambahkan ke module.exports
 module.exports = {
   findProductByBarcode,
   getDefaultCustomer,
   savePenjualan,
   searchRekening,
+  getActivePromos, // -> Export fungsi baru
 };
