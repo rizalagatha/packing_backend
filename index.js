@@ -71,6 +71,9 @@ app.use('/api/minta-barang', mintaBarangRoutes);
 const penjualanRoutes = require('./src/routes/penjualan.routes.js');
 app.use('/api/penjualan', penjualanRoutes);
 
+const invoiceRoutes = require('./src/routes/invoice.routes.js');
+app.use('/api/invoices', invoiceRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
