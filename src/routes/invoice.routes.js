@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const invoiceController = require("../controllers/invoice.controller"); // Pastikan path sesuai
-const { authenticateToken } = require("../middleware/auth.middleware");
+const invoiceController = require("../controllers/invoice.controller.js"); // Pastikan path sesuai
+const { authenticateToken } = require("../middlewares/auth.middleware");
 
 router.use(authenticateToken);
 
