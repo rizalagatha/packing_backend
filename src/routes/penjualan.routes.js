@@ -10,4 +10,7 @@ router.get("/default-customer", penjualanController.getDefaultCustomer);
 router.get("/scan/:barcode", penjualanController.findProductByBarcode);
 router.post("/save", penjualanController.savePenjualan);
 
+router.get("/print/:nomor", penjualanController.getPrintData);
+router.post("/send-wa", penjualanController.sendReceiptWa);
+
 module.exports = router;

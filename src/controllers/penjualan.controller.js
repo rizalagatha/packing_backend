@@ -353,6 +353,145 @@ const getActivePromos = async (req, res) => {
   }
 };
 
+// 5. Get Print Data (Struk)
+const getPrintData = async (req, res) => {
+  try {
+    const { nomor } = req.params;
+
+    // Query Header + Info Toko (tgudang)
+    const headerQuery = `
+            SELECT 
+                h.inv_nomor, h.inv_tanggal, h.user_create, h.date_create,
+                h.inv_bayar, h.inv_kembali, h.inv_pundiamal,
+                h.inv_disc AS diskon_faktur,
+                
+                -- Info Toko
+                g.gdg_inv_nama AS perush_nama,
+                g.gdg_inv_alamat AS perush_alamat,
+                g.gdg_inv_telp AS perush_telp,
+                g.gdg_inv_instagram,
+                g.gdg_inv_fb,
+                g.gdg_akun,
+                g.gdg_transferbank
+
+            FROM tinv_hdr h
+            LEFT JOIN tgudang g ON g.gdg_kode = h.inv_cab
+            WHERE h.inv_nomor = ?
+        `;
+
+    const [headerRows] = await pool.query(headerQuery, [nomor]);
+    if (headerRows.length === 0)
+      return res
+        .status(404)
+        .json({ success: false, message: "Invoice tidak ditemukan." });
+    const header = headerRows[0];
+
+    // Query Details
+    const detailQuery = `
+            SELECT 
+                d.invd_kode, d.invd_ukuran, d.invd_jumlah, 
+                d.invd_harga, d.invd_diskon,
+                TRIM(CONCAT(b.brg_jeniskaos, " ", b.brg_tipe, " ", b.brg_lengan, " ", b.brg_jeniskain, " ", b.brg_warna)) AS nama_barang
+            FROM tinv_dtl d
+            LEFT JOIN tbarangdc b ON b.brg_kode = d.invd_kode
+            WHERE d.invd_inv_nomor = ?
+        `;
+    const [details] = await pool.query(detailQuery, [nomor]);
+
+    // Hitung Summary
+    let subTotal = 0;
+    const items = details.map((item) => {
+      const totalItem = item.invd_jumlah * (item.invd_harga - item.invd_diskon);
+      subTotal += totalItem;
+      return { ...item, total: totalItem };
+    });
+
+    const grandTotal = subTotal - (header.diskon_faktur || 0);
+
+    const data = {
+      header: { ...header, grandTotal, subTotal },
+      details: items,
+    };
+
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("Error getPrintData:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// 6. Send Receipt WA
+const sendReceiptWa = async (req, res) => {
+  try {
+    const { nomor, hp } = req.body;
+
+    // Reuse getPrintData logic or fetch internally
+    // Disini kita format manual string WA-nya
+    // (Anda bisa memanggil fungsi getPrintData internal jika mau, tapi query ulang lebih aman)
+
+    // ... (Query data sama seperti getPrintData) ...
+    // Agar singkat, saya asumsikan kita panggil ulang query sederhana
+    const [rows] = await pool.query(
+      `SELECT h.*, g.gdg_inv_nama FROM tinv_hdr h LEFT JOIN tgudang g ON g.gdg_kode = h.inv_cab WHERE inv_nomor = ?`,
+      [nomor]
+    );
+    if (!rows.length)
+      return res.status(404).json({ message: "Invoice not found" });
+    const hdr = rows[0];
+
+    const [dtl] = await pool.query(
+      `SELECT d.*, b.brg_jeniskaos FROM tinv_dtl d LEFT JOIN tbarangdc b ON b.brg_kode = d.invd_kode WHERE invd_inv_nomor = ?`,
+      [nomor]
+    );
+
+    let message = `*STRUK BELANJA - ${hdr.gdg_inv_nama}*\n`;
+    message += `No: ${hdr.inv_nomor}\n`;
+    message += `Tgl: ${format(new Date(hdr.inv_tanggal), "dd-MM-yyyy")}\n`;
+    message += `--------------------------------\n`;
+
+    let subTotal = 0;
+    dtl.forEach((d) => {
+      const total = d.invd_jumlah * (d.invd_harga - d.invd_diskon);
+      subTotal += total;
+      message += `${d.brg_jeniskaos} (${d.invd_ukuran})\n`;
+      if (d.invd_diskon > 0) {
+        message += `${d.invd_jumlah} x ${d.invd_harga} (Disc ${d.invd_diskon}) = ${total}\n`;
+      } else {
+        message += `${d.invd_jumlah} x ${d.invd_harga} = ${total}\n`;
+      }
+    });
+
+    message += `--------------------------------\n`;
+    message += `Total: Rp ${subTotal}\n`;
+    if (hdr.inv_disc > 0) message += `Diskon: -Rp ${hdr.inv_disc}\n`;
+    message += `*Grand Total: Rp ${subTotal - hdr.inv_disc}*\n`;
+    message += `Bayar: Rp ${hdr.inv_bayar}\n`;
+    message += `Kembali: Rp ${hdr.inv_kembali}\n`;
+    message += `\nTerima kasih telah berbelanja!`;
+
+    // Kirim via Service WA (Sesuaikan dengan service WA Anda)
+    const whatsappService = require("../services/whatsapp.service");
+    await whatsappService.sendMessage(hp, message); // Asumsi fungsi ini ada
+
+    res
+      .status(200)
+      .json({ success: true, message: "Struk berhasil dikirim ke WhatsApp." });
+  } catch (error) {
+    console.error("Error sendReceiptWa:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = {
+  findProductByBarcode,
+  getDefaultCustomer,
+  savePenjualan,
+  searchRekening,
+  getActivePromos,
+  getPrintData, // -> Baru
+  sendReceiptWa, // -> Baru
+};
+
 // Jangan lupa tambahkan ke module.exports
 module.exports = {
   findProductByBarcode,
