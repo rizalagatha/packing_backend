@@ -68,9 +68,15 @@ const findProductByBarcode = async (req, res) => {
 const getDefaultCustomer = async (req, res) => {
   try {
     const { cabang } = req.user;
+    // --- PERBAIKAN: Gunakan ALIAS (AS kode, AS nama) ---
     const query = `
-            SELECT c.cus_kode, c.cus_nama, c.cus_alamat, c.cus_kota, c.cus_telp, 
-                   x.clh_level AS level_kode
+            SELECT 
+                c.cus_kode AS kode, 
+                c.cus_nama AS nama, 
+                c.cus_alamat AS alamat, 
+                c.cus_kota AS kota, 
+                c.cus_telp AS telp, 
+                x.clh_level AS level_kode
             FROM tcustomer c
             LEFT JOIN tcustomer_level_history x ON x.clh_cus_kode = c.cus_kode
             WHERE c.cus_cab = ? AND (c.cus_nama LIKE '%RETAIL%' OR c.cus_nama LIKE 'RETAIL%')
