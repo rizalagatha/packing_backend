@@ -280,13 +280,11 @@ const savePenjualan = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Penjualan ${invNomor} berhasil.`,
-        data: { nomor: invNomor },
-      });
+    res.status(201).json({
+      success: true,
+      message: `Penjualan ${invNomor} berhasil.`,
+      data: { nomor: invNomor },
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error savePenjualan:", error);
@@ -296,4 +294,44 @@ const savePenjualan = async (req, res) => {
   }
 };
 
-module.exports = { findProductByBarcode, getDefaultCustomer, savePenjualan };
+// 4. Search Rekening (Untuk Transfer)
+const searchRekening = async (req, res) => {
+  try {
+    const { term } = req.query;
+    const { cabang } = req.user; // Ambil cabang dari user login
+    const searchTerm = `%${term || ""}%`;
+
+    // Pastikan database 'finance' bisa diakses oleh user DB Anda
+    const query = `
+            SELECT 
+                rek_kode AS kode,
+                rek_nama AS nama,
+                rek_rekening AS rekening
+            FROM finance.trekening 
+            WHERE rek_kaosan LIKE ? 
+              AND (rek_kode LIKE ? OR rek_nama LIKE ?)
+            LIMIT 20;
+        `;
+
+    // Filter rek_kaosan menggunakan %CABANG%
+    const [rows] = await pool.query(query, [
+      `%${cabang}%`,
+      searchTerm,
+      searchTerm,
+    ]);
+
+    res.status(200).json({ success: true, data: { items: rows } });
+  } catch (error) {
+    console.error("Error searchRekening:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mencari rekening." });
+  }
+};
+
+module.exports = {
+  findProductByBarcode,
+  getDefaultCustomer,
+  savePenjualan,
+  searchRekening, // -> Tambahkan export ini
+};

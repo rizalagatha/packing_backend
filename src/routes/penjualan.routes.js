@@ -4,6 +4,7 @@ const penjualanController = require("../controllers/penjualan.controller");
 const { authenticateToken } = require("../middlewares/auth.middleware");
 
 router.use(authenticateToken);
+router.get("/rekening", penjualanController.searchRekening);
 router.get("/default-customer", penjualanController.getDefaultCustomer);
 router.get("/scan/:barcode", penjualanController.findProductByBarcode);
 router.post("/save", penjualanController.savePenjualan);
