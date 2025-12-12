@@ -491,12 +491,3 @@ module.exports = {
   getPrintData, // -> Baru
   sendReceiptWa, // -> Baru
 };
-
-// Jangan lupa tambahkan ke module.exports
-module.exports = {
-  findProductByBarcode,
-  getDefaultCustomer,
-  savePenjualan,
-  searchRekening,
-  getActivePromos, // -> Export fungsi baru
-};
