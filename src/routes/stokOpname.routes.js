@@ -4,6 +4,7 @@ const soController = require("../controllers/stokOpname.controller");
 const { authenticateToken } = require("../middlewares/auth.middleware");
 
 router.use(authenticateToken);
+router.get("/cabang", soController.getCabangList);
 router.get("/download", soController.downloadMasterBarang);
 router.post("/upload", soController.uploadHasilOpname);
 

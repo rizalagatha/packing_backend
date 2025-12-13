@@ -1,11 +1,28 @@
 const pool = require("../config/database");
 
-// 1. Download Master Barang (Untuk disimpan ke SQLite HP)
+// --- FUNGSI BARU: List Cabang (Untuk Dropdown) ---
+const getCabangList = async (req, res) => {
+  try {
+    // Ambil semua gudang/cabang
+    const [rows] = await pool.query(
+      "SELECT gdg_kode AS kode, gdg_nama AS nama FROM tgudang ORDER BY gdg_kode"
+    );
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// 1. Download Master (Revisi: Terima parameter cabang)
 const downloadMasterBarang = async (req, res) => {
   try {
-    const { cabang } = req.user;
+    // Prioritas: Ambil dari query param (?cabang=K01), jika tidak ada pakai cabang user login
+    const targetCabang = req.query.cabang || req.user.cabang;
 
-    // Ambil data barang & stok saat ini
+    console.log(
+      `User ${req.user.kode} mendownload master untuk cabang: ${targetCabang}`
+    );
+
     const query = `
             SELECT 
                 d.brgd_barcode AS barcode,
@@ -23,7 +40,7 @@ const downloadMasterBarang = async (req, res) => {
             WHERE h.brg_aktif=0 AND h.brg_logstok <> 'N';
         `;
 
-    const [rows] = await pool.query(query, [cabang]);
+    const [rows] = await pool.query(query, [targetCabang]);
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
     console.error("Error downloadMasterBarang:", error);
@@ -33,31 +50,32 @@ const downloadMasterBarang = async (req, res) => {
   }
 };
 
-// 2. Upload Hasil Opname (Dari SQLite HP ke Server)
+// 2. Upload Hasil (Revisi: Terima parameter cabang tujuan)
 const uploadHasilOpname = async (req, res) => {
-  const { items } = req.body; // Array hasil scan dari SQLite
+  const { items, targetCabang } = req.body; // <-- Terima targetCabang dari body
   const user = req.user;
-  let connection;
 
+  // Jika tidak dikirim, fallback ke cabang user sendiri
+  const cabangTujuan = targetCabang || user.cabang;
+
+  let connection;
   try {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    // Simpan ke tabel temporary atau tabel hasil opname (sesuaikan dengan struktur DB Anda)
-    // Misal: tstokopname_temp
     const insertQuery = `
             INSERT INTO tstokopname_temp (so_cab, so_user, so_tanggal, so_barcode, so_kode, so_qty_fisik, so_qty_sistem, date_create)
             VALUES ?
         `;
 
     const values = items.map((item) => [
-      user.cabang,
+      cabangTujuan, // <-- Gunakan cabang tujuan yang dipilih
       user.kode,
       new Date(),
       item.barcode,
       item.kode,
       item.qty_fisik,
-      item.stok_sistem, // Opsional, untuk perbandingan
+      item.stok_sistem,
       new Date(),
     ]);
 
@@ -66,9 +84,10 @@ const uploadHasilOpname = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(200)
-      .json({ success: true, message: "Data opname berhasil diupload." });
+    res.status(200).json({
+      success: true,
+      message: `Data opname untuk ${cabangTujuan} berhasil diupload.`,
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error uploadHasilOpname:", error);
@@ -80,4 +99,4 @@ const uploadHasilOpname = async (req, res) => {
   }
 };
 
-module.exports = { downloadMasterBarang, uploadHasilOpname };
+module.exports = { getCabangList, downloadMasterBarang, uploadHasilOpname };
