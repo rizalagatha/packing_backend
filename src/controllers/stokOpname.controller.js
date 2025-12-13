@@ -35,21 +35,21 @@ const downloadMasterBarang = async (req, res) => {
     // Menghapus 'd.brgd_lokasi' yang menyebabkan error
     // Menggantinya dengan '' AS lokasi (string kosong) agar SQLite tidak error
     const query = `
-            SELECT 
-                d.brgd_barcode AS barcode,
-                d.brgd_kode AS kode,
-                TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
-                d.brgd_ukuran AS ukuran,
-                '' AS lokasi, 
-                IFNULL((
-                    SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
-                    FROM tmasterstok m 
-                    WHERE m.mst_aktif='Y' AND m.mst_cab=? AND m.mst_brg_kode=d.brgd_kode AND m.mst_ukuran=d.brgd_ukuran
-                ), 0) AS stok_sistem
-            FROM tbarangdc_dtl d
-            LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
-            WHERE h.brg_aktif=0 AND h.brg_logstok <> 'N';
-        `;
+    SELECT 
+        TRIM(d.brgd_barcode) AS barcode,  -- <--- TAMBAHKAN TRIM() DI SINI
+        d.brgd_kode AS kode,
+        TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
+        d.brgd_ukuran AS ukuran,
+        '' AS lokasi,
+        IFNULL((
+            SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
+            FROM tmasterstok m 
+            WHERE m.mst_aktif='Y' AND m.mst_cab=? AND m.mst_brg_kode=d.brgd_kode AND m.mst_ukuran=d.brgd_ukuran
+        ), 0) AS stok_sistem
+    FROM tbarangdc_dtl d
+    LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
+    WHERE h.brg_aktif=0 AND h.brg_logstok <> 'N';
+`;
 
     const [rows] = await pool.query(query, [targetCabang, targetCabang]); // Perhatikan parameter targetCabang dipakai 2x (sekali di subquery stok, sekali di logika jika diperlukan, tapi di sini cuma 1x di subquery cukup. Cek bindingnya)
 
