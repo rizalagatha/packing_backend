@@ -74,6 +74,9 @@ app.use('/api/penjualan', penjualanRoutes);
 const invoiceRoutes = require('./src/routes/invoice.routes.js');
 app.use('/api/invoices', invoiceRoutes);
 
+const stokOpnameRoutes = require("./src/routes/stokOpname.routes.js");
+app.use("/api/stok-opname", stokOpnameRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
