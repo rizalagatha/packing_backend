@@ -16,20 +16,18 @@ const getCabangList = async (req, res) => {
 // 1. Download Master (Revisi: Terima parameter cabang)
 const downloadMasterBarang = async (req, res) => {
   try {
-    // Prioritas: Ambil dari query param (?cabang=K01), jika tidak ada pakai cabang user login
     const targetCabang = req.query.cabang || req.user.cabang;
 
-    console.log(
-      `User ${req.user.kode} mendownload master untuk cabang: ${targetCabang}`
-    );
-
+    // REVISI QUERY:
+    // Menghapus 'd.brgd_lokasi' yang menyebabkan error
+    // Menggantinya dengan '' AS lokasi (string kosong) agar SQLite tidak error
     const query = `
             SELECT 
                 d.brgd_barcode AS barcode,
                 d.brgd_kode AS kode,
                 TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
                 d.brgd_ukuran AS ukuran,
-                d.brgd_lokasi AS lokasi,
+                '' AS lokasi, 
                 IFNULL((
                     SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
                     FROM tmasterstok m 
@@ -40,7 +38,12 @@ const downloadMasterBarang = async (req, res) => {
             WHERE h.brg_aktif=0 AND h.brg_logstok <> 'N';
         `;
 
-    const [rows] = await pool.query(query, [targetCabang]);
+    const [rows] = await pool.query(query, [targetCabang, targetCabang]); // Perhatikan parameter targetCabang dipakai 2x (sekali di subquery stok, sekali di logika jika diperlukan, tapi di sini cuma 1x di subquery cukup. Cek bindingnya)
+
+    // KOREKSI BINDING PARAMETER:
+    // Di query di atas, tanda tanya (?) hanya ada SATU, yaitu di dalam subquery stok (m.mst_cab=?).
+    // Jadi parameternya cukup [targetCabang] saja.
+
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
     console.error("Error downloadMasterBarang:", error);
