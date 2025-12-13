@@ -1,15 +1,28 @@
 const pool = require("../config/database");
 
-// --- FUNGSI BARU: List Cabang (Untuk Dropdown) ---
+// --- FUNGSI BARU: List Cabang (Untuk Dropdown Stok Opname) ---
 const getCabangList = async (req, res) => {
   try {
-    // Ambil semua gudang/cabang
     const [rows] = await pool.query(
-      "SELECT gdg_kode AS kode, gdg_nama AS nama FROM tgudang ORDER BY gdg_kode"
+      `
+      SELECT 
+        gdg_kode AS kode,
+        gdg_nama AS nama
+      FROM tgudang
+      WHERE gdg_dc IN (0, 1)
+      ORDER BY gdg_kode
+      `
     );
-    res.status(200).json({ success: true, data: rows });
+
+    res.status(200).json({
+      success: true,
+      data: rows,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
