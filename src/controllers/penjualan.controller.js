@@ -391,7 +391,13 @@ const getPrintData = async (req, res) => {
             SELECT 
                 d.invd_kode, d.invd_ukuran, d.invd_jumlah, 
                 d.invd_harga, d.invd_diskon,
-                TRIM(CONCAT(b.brg_jeniskaos, " ", b.brg_tipe, " ", b.brg_lengan, " ", b.brg_jeniskain, " ", b.brg_warna)) AS nama_barang
+                TRIM(
+                    COALESCE(
+                        CONCAT(b.brg_jeniskaos, " ", b.brg_tipe, " ", b.brg_lengan, " ", b.brg_jeniskain, " ", b.brg_warna),
+                        f.sd_nama, 
+                        d.invd_kode
+                    )
+                ) AS nama_barang
             FROM tinv_dtl d
             LEFT JOIN tbarangdc b ON b.brg_kode = d.invd_kode
             WHERE d.invd_inv_nomor = ?

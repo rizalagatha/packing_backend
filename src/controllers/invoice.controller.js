@@ -27,11 +27,20 @@ const getCabangList = async (req, res) => {
   }
 };
 
-// 2. Get Invoice List (Browse)
+// 2. Get Invoice List (Browse) - DENGAN PAGINATION
 const getList = async (req, res) => {
   try {
     // Ambil filter dari query params
-    const { startDate, endDate, cabang, status } = req.query;
+    // NEW: Tambahkan page & limit
+    const {
+      startDate,
+      endDate,
+      cabang,
+      status,
+      page = 1,
+      limit = 20,
+      search,
+    } = req.query;
 
     const params = [startDate, endDate];
     let cabangFilter = "";
@@ -58,6 +67,19 @@ const getList = async (req, res) => {
                 )
             `;
     }
+
+    // --- NEW: Filter Search (Server Side) ---
+    // Agar pagination tetap akurat saat mencari data
+    let searchFilterClause = "";
+    if (search) {
+      searchFilterClause = ` AND (FL.Nomor LIKE ? OR FL.Nama LIKE ?) `;
+      params.push(`%${search}%`, `%${search}%`);
+    }
+
+    // --- NEW: Pagination Logic ---
+    const limitVal = parseInt(limit) || 20;
+    const pageVal = parseInt(page) || 1;
+    const offsetVal = (pageVal - 1) * limitVal;
 
     const query = `
             WITH
@@ -119,8 +141,13 @@ const getList = async (req, res) => {
             SELECT * FROM FinalList FL
             WHERE 1=1
             ${statusFilterClause}
-            ORDER BY FL.Tanggal DESC, FL.Nomor DESC;
+            ${searchFilterClause}
+            ORDER BY FL.Tanggal DESC, FL.Nomor DESC
+            LIMIT ? OFFSET ?;  -- NEW: Pagination
         `;
+
+    // Tambahkan params limit & offset di akhir array params
+    params.push(limitVal, offsetVal);
 
     const [rows] = await pool.query(query, params);
     res.status(200).json({ success: true, data: rows });
