@@ -400,6 +400,7 @@ const getPrintData = async (req, res) => {
                 ) AS nama_barang
             FROM tinv_dtl d
             LEFT JOIN tbarangdc b ON b.brg_kode = d.invd_kode
+            LEFT JOIN tsodtf_hdr f ON f.sd_nomor = d.invd_kode
             WHERE d.invd_inv_nomor = ?
         `;
     const [details] = await pool.query(detailQuery, [nomor]);
