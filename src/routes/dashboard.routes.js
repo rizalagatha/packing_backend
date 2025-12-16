@@ -21,4 +21,7 @@ router.get("/sales-chart", dashboardController.getSalesChart);
 // 5. Pending Actions (Notifikasi)
 router.get("/pending-actions", dashboardController.getPendingActions);
 
+// --- 6. TARGET PENJUALAN (BARU) ---
+router.get("/sales-target-summary", dashboardController.getSalesTargetSummary);
+
 module.exports = router;

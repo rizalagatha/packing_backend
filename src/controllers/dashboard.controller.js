@@ -80,64 +80,137 @@ const getTotalPiutang = async (req, res) => {
   }
 };
 
-// --- 3. Ranking Performa Cabang (Khusus KDC) ---
-const getBranchPerformance = async (req, res) => {
-  try {
-    const user = req.user;
-    // Security check: Hanya KDC yang boleh lihat ranking
-    if (user.cabang !== "KDC") return res.json([]);
+// 1. UPDATE FUNGSI INI (Untuk Grafik Pencapaian Target)
+const getSalesTargetSummary = async (user) => {
+  const tahun = new Date().getFullYear();
+  const bulan = new Date().getMonth() + 1;
 
-    const currentMonth = moment().format("M");
-    const currentYear = moment().format("YYYY");
+  let branchFilter = "AND h.inv_cab = ?";
+  // Urutan params: [Tahun Target, Bulan Target, (Cabang Target), Tahun Jual, Bulan Jual, (Cabang Jual)]
+  // Kita sederhanakan agar tidak bingung
+  
+  let targetQueryPart = "";
+  let salesQueryPart = "";
+  let params = [];
 
-    // Query Kompleks: Gabungkan Realisasi Sales vs Target KPI
-    const query = `
-      SELECT 
-        g.gdg_kode as kode_cabang,
-        g.gdg_nama as nama_cabang,
-        
-        -- 1. Realisasi Sales Bulan Ini
-        COALESCE((
-          SELECT SUM(
-             (SELECT SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) 
-              FROM tinv_dtl d WHERE d.invd_inv_nomor = h.inv_nomor) - h.inv_disc
-          )
-          FROM tinv_hdr h
-          WHERE h.inv_cab = g.gdg_kode 
-            AND MONTH(h.inv_tanggal) = ? AND YEAR(h.inv_tanggal) = ?
-            AND h.inv_sts_pro = 0
-        ), 0) as nominal,
+  // --- A. BUILD PARAMS UNTUK TARGET ---
+  params.push(tahun, bulan);
+  if (user.cabang !== "KDC") {
+    targetQueryPart = "AND t.kode_gudang = ?";
+    params.push(user.cabang);
+  }
 
-        -- 2. Target Sales (Dari tabel target KPI)
-        COALESCE((
-           SELECT t.target_omset 
-           FROM kpi.ttarget_kaosan t 
-           WHERE t.kode_gudang = g.gdg_kode 
-             AND t.bulan = ? AND t.tahun = ?
-           LIMIT 1
-        ), 1) as target -- Default 1 biar ga divide by zero
+  // --- B. BUILD PARAMS UNTUK SALES ---
+  params.push(tahun, bulan);
+  if (user.cabang !== "KDC") {
+    salesQueryPart = "AND h.inv_cab = ?";
+    params.push(user.cabang);
+  }
 
-      FROM tgudang g
-      WHERE g.gdg_kode != 'KDC' -- Exclude Head Office
-      ORDER BY nominal DESC
+  const query = `
+    SELECT 
+        -- 1. Hitung Nominal (Sales - Diskon)
+        IFNULL(
+            (
+              SELECT SUM(
+                  (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
+                   FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc
+              ) 
+              FROM tinv_hdr h
+              WHERE h.inv_sts_pro = 0 
+                AND YEAR(h.inv_tanggal) = ? 
+                AND MONTH(h.inv_tanggal) = ?
+                ${salesQueryPart}
+            ), 0
+        ) AS nominal,
+
+        -- 2. Ambil Target
+        IFNULL(
+            (
+                SELECT SUM(t.target_omset) 
+                FROM kpi.ttarget_kaosan t 
+                WHERE t.tahun = ? AND t.bulan = ? 
+                ${targetQueryPart}
+            ), 0
+        ) AS target
+  `;
+  
+  // Perhatikan urutan params harus sesuai dengan urutan '?' di query
+  // Urutan: [Tahun Jual, Bulan Jual, (Cabang Jual), Tahun Target, Bulan Target, (Cabang Target)]
+  // Kita susun ulang params agar sesuai query di atas
+  
+  let finalParams = [tahun, bulan];
+  if (user.cabang !== "KDC") finalParams.push(user.cabang);
+  
+  finalParams.push(tahun, bulan);
+  if (user.cabang !== "KDC") finalParams.push(user.cabang);
+
+  const [rows] = await pool.query(query, finalParams);
+  return rows[0];
+};
+
+// 2. UPDATE FUNGSI INI (Untuk Tabel Performa Cabang - Logika Retur)
+const getBranchPerformance = async (user) => {
+  if (user.cabang !== "KDC") return [];
+
+  const tahun = new Date().getFullYear();
+  const bulan = new Date().getMonth() + 1;
+
+  const query = `
+        WITH MonthlySales AS (
+            SELECT 
+                cabang, 
+                SUM(nominal) AS nominal 
+            FROM v_sales_harian
+            WHERE YEAR(tanggal) = ? AND MONTH(tanggal) = ?
+            GROUP BY cabang
+        ),
+        MonthlyTargets AS (
+            SELECT 
+                kode_gudang AS cabang, 
+                SUM(target_omset) AS target
+            FROM kpi.ttarget_kaosan
+            WHERE tahun = ? AND bulan = ?
+            GROUP BY cabang
+        ),
+        MonthlyReturns AS (
+            SELECT 
+                rh.rj_cab AS cabang,
+                SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)) AS total_retur
+            FROM trj_hdr rh
+            JOIN trj_dtl rd ON rd.rjd_nomor = rh.rj_nomor
+            WHERE YEAR(rh.rj_tanggal) = ? AND MONTH(rh.rj_tanggal) = ?
+            GROUP BY rh.rj_cab
+        )
+        SELECT 
+            g.gdg_kode AS kode_cabang,
+            g.gdg_nama AS nama_cabang,
+            -- Nominal Bersih = Sales - Retur
+            (COALESCE(ms.nominal, 0) - COALESCE(mr.total_retur, 0)) AS nominal,
+            COALESCE(mt.target, 0) AS target,
+            CASE 
+                WHEN COALESCE(mt.target, 0) > 0 THEN 
+                    ((COALESCE(ms.nominal, 0) - COALESCE(mr.total_retur, 0)) / mt.target) * 100 
+                ELSE 0 
+            END AS ach
+        FROM tgudang g
+        LEFT JOIN MonthlySales ms ON g.gdg_kode = ms.cabang
+        LEFT JOIN MonthlyTargets mt ON g.gdg_kode = mt.cabang
+        LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
+        WHERE 
+            (g.gdg_dc = 0 OR g.gdg_kode = 'KPR') 
+            AND g.gdg_kode <> 'KDC'
+        ORDER BY ach DESC;
     `;
 
-    const params = [currentMonth, currentYear, currentMonth, currentYear];
+  const params = [tahun, bulan, tahun, bulan, tahun, bulan];
+
+  try {
     const [rows] = await pool.query(query, params);
-
-    // Hitung % Achievement di JS (atau bisa di SQL)
-    const result = rows.map((row) => ({
-      ...row,
-      ach: (row.nominal / row.target) * 100,
-    }));
-
-    // Sort by Achievement % (Opsional, atau biarkan by Nominal)
-    result.sort((a, b) => b.ach - a.ach);
-
-    res.json(result);
+    return rows;
   } catch (error) {
     console.error("Error getBranchPerformance:", error);
-    res.status(500).json({ message: "Gagal memuat performa cabang" });
+    return [];
   }
 };
 
@@ -202,21 +275,15 @@ const getPendingActions = async (user) => {
     SELECT COUNT(*) AS total_kosong 
     FROM (
         SELECT 
-            b.brgd_kode,
-            b.brgd_ukuran,
-            IFNULL((
-                SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
-                FROM tmasterstok m 
-                WHERE m.mst_aktif = 'Y' 
-                  AND m.mst_cab = ? 
-                  AND m.mst_brg_kode = b.brgd_kode 
-                  AND m.mst_ukuran = b.brgd_ukuran
-            ), 0) AS stok_akhir
-        FROM tbarangdc_dtl b
-        INNER JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
-        WHERE a.brg_aktif = 0 
-          AND a.brg_ktgp = 'REGULER'
-        HAVING stok_akhir <= 0
+            m.mst_brg_kode,
+            m.mst_ukuran
+        FROM tmasterstok m
+        JOIN tbarangdc a ON a.brg_kode = m.mst_brg_kode
+        WHERE m.mst_aktif = 'Y' 
+          AND m.mst_cab = ? 
+          AND a.brg_ktgp = 'REGULER' -- Filter Kategori di awal biar scan lebih sedikit
+        GROUP BY m.mst_brg_kode, m.mst_ukuran
+        HAVING SUM(m.mst_stok_in - m.mst_stok_out) <= 0
     ) AS summary_stok;
   `;
 
@@ -239,6 +306,7 @@ const getPendingActions = async (user) => {
 module.exports = {
   getTodayStats,
   getTotalPiutang,
+  getSalesTargetSummary,
   getBranchPerformance,
   getSalesChart,
   getPendingActions,
