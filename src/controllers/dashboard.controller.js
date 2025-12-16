@@ -188,53 +188,51 @@ const getSalesChart = async (req, res) => {
 };
 
 // --- 5. Pending Actions (Notifikasi) ---
-const getPendingActions = async (req, res) => {
+// GANTI FUNGSI INI DI BACKEND
+const getPendingActions = async (user) => {
+  // Kita ganti logika "Pending Action" menjadi "Info Stok Kosong Reguler"
+
+  // Tentukan cabang yang mau dicek (Default: cabang user login)
+  // Jika KDC, kita bisa default ke salah satu cabang atau tetap KDC (biasanya KDC stoknya dikit)
+  let branchToCheck = user.cabang;
+
+  // Query: Hitung jumlah SKU (Barang + Ukuran) yang stoknya <= 0
+  // Kategori: REGULER, Barang Aktif: Ya (0 artinya aktif di sistem Anda sepertinya, berdasarkan getStokKosongReguler)
+  const query = `
+    SELECT COUNT(*) AS total_kosong 
+    FROM (
+        SELECT 
+            b.brgd_kode,
+            b.brgd_ukuran,
+            IFNULL((
+                SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
+                FROM tmasterstok m 
+                WHERE m.mst_aktif = 'Y' 
+                  AND m.mst_cab = ? 
+                  AND m.mst_brg_kode = b.brgd_kode 
+                  AND m.mst_ukuran = b.brgd_ukuran
+            ), 0) AS stok_akhir
+        FROM tbarangdc_dtl b
+        INNER JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
+        WHERE a.brg_aktif = 0 
+          AND a.brg_ktgp = 'REGULER'
+        HAVING stok_akhir <= 0
+    ) AS summary_stok;
+  `;
+
   try {
-    const user = req.user;
-    let branchFilter = "";
-    const params = [];
+    const [rows] = await pool.query(query, [branchToCheck]);
 
-    // Filter cabang (jika bukan KDC)
-    // Note: Anda harus sesuaikan nama kolom cabang di tiap tabel (misal: so_cab, pen_cab)
-    if (user.cabang !== "KDC") {
-      // Logic filter cabang manual per query di bawah
-    }
-
-    // A. SO OPEN (Belum diproses invoice)
-    // Asumsi: tso_hdr status open
-    let soQuery = `SELECT COUNT(*) as cnt FROM tso_hdr WHERE so_close = 0`;
-    if (user.cabang !== "KDC")
-      soQuery += ` AND LEFT(so_nomor, 3) = '${user.cabang}'`;
-    const [soRows] = await pool.query(soQuery);
-
-    // B. Invoice Belum Lunas (Piutang)
-    // Logika simpel: ambil dari header yang bayar < total
-    // (Atau gunakan logic tpiutang yang lebih akurat)
-    let invQuery = `
-       SELECT COUNT(DISTINCT u.ph_inv_nomor) as cnt
-       FROM tpiutang_hdr u
-       JOIN (SELECT pd_ph_nomor, SUM(pd_debet)-SUM(pd_kredit) as sisa FROM tpiutang_dtl GROUP BY pd_ph_nomor) s 
-         ON s.pd_ph_nomor = u.ph_nomor
-       WHERE s.sisa > 100
-    `;
-    if (user.cabang !== "KDC")
-      invQuery += ` AND LEFT(u.ph_inv_nomor, 3) = '${user.cabang}'`;
-    const [invRows] = await pool.query(invQuery);
-
-    // C. SO DTF Pending (Belum jadi Invoice)
-    let dtfQuery = `SELECT COUNT(*) as cnt FROM tsodtf_hdr WHERE sd_close = 'N' AND sd_invoiced = 'N'`;
-    if (user.cabang !== "KDC")
-      dtfQuery += ` AND LEFT(sd_nomor, 3) = '${user.cabang}'`;
-    const [dtfRows] = await pool.query(dtfQuery);
-
-    res.json({
-      so_open: soRows[0].cnt,
-      invoice_belum_lunas: invRows[0].cnt,
-      so_dtf_open: dtfRows[0].cnt,
-    });
+    // Kembalikan format object baru
+    return {
+      stok_kosong_reguler: rows[0].total_kosong || 0,
+      // Field lama kita set 0 atau null biar frontend lama gak error (opsional)
+      so_open: 0,
+      invoice_belum_lunas: 0,
+    };
   } catch (error) {
-    console.error("Error getPendingActions:", error);
-    res.status(500).json({ message: "Gagal memuat pending actions" });
+    console.error("Error getPendingActions (Stok Kosong):", error);
+    return { stok_kosong_reguler: 0 };
   }
 };
 
