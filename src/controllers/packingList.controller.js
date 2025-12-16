@@ -279,10 +279,12 @@ const findProductByBarcode = async (req, res) => {
  * 5. Lookup Permintaan Open (Search Modal)
  */
 const searchPermintaanOpen = async (req, res) => {
-  const { term = "", storeKode } = req.query;
-
+  const { term = '', storeKode } = req.query;
+  
   try {
-    let whereClause = "WHERE h.mt_status = 'O'"; // Hanya yang status Open
+    // --- PERBAIKAN DISINI ---
+    // Ganti 'mt_status = O' menjadi 'mt_close = N'
+    let whereClause = "WHERE h.mt_close = 'N'"; 
     let params = [];
 
     // Filter by Store (Wajib jika ada)
@@ -311,9 +313,9 @@ const searchPermintaanOpen = async (req, res) => {
     `;
 
     const [rows] = await pool.query(query, params);
-
-    // Return format standard untuk SearchModal (langsung array)
+    
     res.json(rows);
+
   } catch (error) {
     console.error("Error searchPermintaanOpen:", error);
     res.status(500).json({ message: error.message });
