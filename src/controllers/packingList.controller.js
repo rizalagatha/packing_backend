@@ -277,63 +277,55 @@ const findProductByBarcode = async (req, res) => {
 
 /**
  * 5. Lookup Permintaan Open (Search Modal)
+ * Logic disamakan dengan SuratJalanScreen (Referensi Delphi)
  */
 const searchPermintaanOpen = async (req, res) => {
   const { term = '', page = 1, storeKode } = req.query;
   
   try {
-    // 1. Validasi: Store Kode Wajib Ada
     if (!storeKode) {
-        return res.json([]); // Kembalikan array kosong jika tidak ada store
+        return res.json([]); // Wajib ada store
     }
 
     const itemsPerPage = 20;
     const offset = (page - 1) * itemsPerPage;
     const searchTerm = `%${term}%`;
 
-    // 2. SUSUN PARAMETER (Harus urut sesuai tanda '?' di query bawah)
-    // Urutan: 
-    // 1. Store Kode (LEFT...)
-    // 2. Search Term (mt_nomor)
-    // 3. Search Term (mt_tanggal)
-    // 4. Search Term (mt_otomatis)
-    // 5. Search Term (mt_ket)
-    // 6. Limit
-    // 7. Offset
+    // Params urut sesuai query di bawah
     const params = [
-        storeKode, 
-        searchTerm, 
-        searchTerm, 
-        searchTerm, 
-        searchTerm, 
-        itemsPerPage, 
-        offset
+        storeKode,      // 1. LEFT(mt_nomor, 3)
+        searchTerm,     // 2. LIKE mt_nomor
+        searchTerm,     // 3. LIKE mt_tanggal
+        searchTerm,     // 4. LIKE mt_otomatis
+        searchTerm,     // 5. LIKE mt_ket
+        itemsPerPage,   // 6. LIMIT
+        offset          // 7. OFFSET
     ];
 
     const query = `
         SELECT 
-            h.mt_nomor, 
-            h.mt_tanggal,
-            h.mt_otomatis, 
-            h.mt_ket,
-            (SELECT COUNT(d.mtd_kode) FROM tmintabarang_dtl d WHERE d.mtd_nomor = h.mt_nomor) as total_items
+            h.mt_nomor AS nomor, 
+            h.mt_tanggal AS tanggal, 
+            h.mt_otomatis AS otomatis, 
+            h.mt_ket AS keterangan
         FROM tmintabarang_hdr h
         WHERE 
-            h.mt_close = 'N' 
-            -- Filter Store berdasarkan 3 huruf depan nomor permintaan
-            AND LEFT(h.mt_nomor, 3) = ? 
+            -- 1. Filter Store berdasarkan 3 digit awal nomor permintaan
+            LEFT(h.mt_nomor, 3) = ? 
             
-            -- Filter Validasi (Belum jadi SJ)
-            AND h.mt_nomor NOT IN (SELECT sj_mt_nomor FROM tdc_sj_hdr WHERE sj_mt_nomor <> "")
+            -- 2. Pastikan belum ada di Packing List lain (Agar tidak dobel)
+            AND h.mt_nomor NOT IN (
+                SELECT pl_mt_nomor FROM tpacking_list_hdr WHERE pl_mt_nomor IS NOT NULL AND pl_mt_nomor <> ""
+            )
             
-            -- Filter Pencarian Text
+            -- 3. Pencarian Text
             AND (
                 h.mt_nomor LIKE ? 
                 OR h.mt_tanggal LIKE ? 
                 OR h.mt_otomatis LIKE ? 
                 OR h.mt_ket LIKE ?
             )
-        ORDER BY h.mt_tanggal DESC
+        ORDER BY h.date_create DESC
         LIMIT ? OFFSET ?
     `;
 
