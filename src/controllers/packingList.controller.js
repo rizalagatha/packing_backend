@@ -277,27 +277,37 @@ const findProductByBarcode = async (req, res) => {
 
 /**
  * 5. Lookup Permintaan Open (Search Modal)
- * Logic: Filter by Store Code prefix & Exclude SJ yang sudah ada
  */
 const searchPermintaanOpen = async (req, res) => {
-  // Ambil parameter dari frontend (SearchModal mengirim term & page)
   const { term = '', page = 1, storeKode } = req.query;
   
   try {
+    // 1. Validasi: Store Kode Wajib Ada
     if (!storeKode) {
-        return res.status(400).json({ message: "Store kode diperlukan." });
+        return res.json([]); // Kembalikan array kosong jika tidak ada store
     }
 
     const itemsPerPage = 20;
     const offset = (page - 1) * itemsPerPage;
     const searchTerm = `%${term}%`;
 
-    // Parameter untuk query
-    // Urutan: [StoreKode, Term, Term, Term, Term, Limit, Offset]
+    // 2. SUSUN PARAMETER (Harus urut sesuai tanda '?' di query bawah)
+    // Urutan: 
+    // 1. Store Kode (LEFT...)
+    // 2. Search Term (mt_nomor)
+    // 3. Search Term (mt_tanggal)
+    // 4. Search Term (mt_otomatis)
+    // 5. Search Term (mt_ket)
+    // 6. Limit
+    // 7. Offset
     const params = [
         storeKode, 
-        searchTerm, searchTerm, searchTerm, searchTerm, 
-        itemsPerPage, offset
+        searchTerm, 
+        searchTerm, 
+        searchTerm, 
+        searchTerm, 
+        itemsPerPage, 
+        offset
     ];
 
     const query = `
@@ -306,36 +316,28 @@ const searchPermintaanOpen = async (req, res) => {
             h.mt_tanggal,
             h.mt_otomatis, 
             h.mt_ket,
-            
-            -- Hitung total item untuk display di frontend
             (SELECT COUNT(d.mtd_kode) FROM tmintabarang_dtl d WHERE d.mtd_nomor = h.mt_nomor) as total_items
-
         FROM tmintabarang_hdr h
         WHERE 
-            -- 1. Filter Cabang (3 digit awal nomor permintaan = kode cabang)
-            LEFT(h.mt_nomor, 3) = ? 
+            h.mt_close = 'N' 
+            -- Filter Store berdasarkan 3 huruf depan nomor permintaan
+            AND LEFT(h.mt_nomor, 3) = ? 
             
-            -- 2. Pastikan belum dibuatkan Surat Jalan (SJ)
+            -- Filter Validasi (Belum jadi SJ)
             AND h.mt_nomor NOT IN (SELECT sj_mt_nomor FROM tdc_sj_hdr WHERE sj_mt_nomor <> "")
             
-            -- 3. Pencarian Teks
+            -- Filter Pencarian Text
             AND (
                 h.mt_nomor LIKE ? 
                 OR h.mt_tanggal LIKE ? 
                 OR h.mt_otomatis LIKE ? 
                 OR h.mt_ket LIKE ?
             )
-            
-        ORDER BY h.date_create DESC
+        ORDER BY h.mt_tanggal DESC
         LIMIT ? OFFSET ?
     `;
 
     const [rows] = await pool.query(query, params);
-    
-    // Opsional: Jika ingin mengirim total data untuk pagination frontend yang lebih presisi
-    // const countQuery = `SELECT COUNT(*) as total ... (query where sama) ...`;
-    
-    // Return array data langsung agar SearchModal bisa membacanya otomatis
     res.json(rows);
 
   } catch (error) {
