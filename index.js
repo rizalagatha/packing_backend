@@ -80,6 +80,9 @@ app.use("/api/stok-opname", stokOpnameRoutes);
 const dashboardRoutes = require("./src/routes/dashboard.routes");
 app.use("/api/dashboard", dashboardRoutes);
 
+const packingListRoutes = require("./src/routes/packingList.routes"); // <--- Import
+app.use("/api/packing-list-form", packingListRoutes); // <--- Daftarkan
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
