@@ -197,9 +197,12 @@ const getPackingListDetail = async (req, res) => {
 
 /**
  * 3. Load Items dari Permintaan (tmintabarang_dtl)
+ * Mengambil detail barang berdasarkan Nomor Permintaan
  */
 const loadItemsFromRequest = async (req, res) => {
-  const { nomor } = req.query; // ?nomor=MT...
+  const { nomor } = req.query; // Mengambil ?nomor=...
+
+  console.log(`[API] Loading items for Permintaan: ${nomor}`);
 
   try {
     const query = `
@@ -208,9 +211,11 @@ const loadItemsFromRequest = async (req, res) => {
         TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS nama,
         d.mtd_ukuran AS ukuran,
         d.mtd_jumlah AS minta,
+        
+        -- Ambil Barcode
         b.brgd_barcode AS barcode,
         
-        -- Stok DC (KDC)
+        -- Hitung Stok DC (KDC) saat ini untuk referensi
         IFNULL((
            SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
            FROM tmasterstok m 
@@ -228,10 +233,15 @@ const loadItemsFromRequest = async (req, res) => {
     `;
 
     const [rows] = await pool.query(query, [nomor]);
+
+    console.log(`[API] Found ${rows.length} items.`);
+
+    // Kembalikan array data ke frontend
     res.json(rows);
+
   } catch (error) {
     console.error("Error loadItemsFromRequest:", error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: "Terjadi kesalahan saat memuat item permintaan." });
   }
 };
 
