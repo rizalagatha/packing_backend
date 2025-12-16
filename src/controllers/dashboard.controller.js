@@ -2,51 +2,57 @@ const pool = require("../config/database");
 const moment = require("moment");
 
 // --- 1. Statistik Hari Ini ---
+// --- 1. Statistik Hari Ini (Fixed NaN Issue) ---
 const getTodayStats = async (req, res) => {
   try {
     const user = req.user;
     const today = moment().format("YYYY-MM-DD");
-    let branchFilter = user.cabang !== "KDC" ? " AND h.inv_cab = ? " : "";
-    const params = user.cabang !== "KDC" ? [today, user.cabang] : [today];
+    
+    let branchFilter = "";
+    const params = [today];
 
-    // Optimasi: Join langsung, hindari subquery select select
-    const query = `
-      SELECT 
-        COUNT(DISTINCT h.inv_nomor) AS todayTransactions,
-        COALESCE(SUM(d.invd_jumlah), 0) AS todayQty,
-        COALESCE(SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) - SUM(DISTINCT h.inv_disc) + SUM(DISTINCT h.inv_ppn), 0) AS todaySales
-      FROM tinv_hdr h
-      JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
-      WHERE h.inv_tanggal = ? 
-        AND h.inv_sts_pro = 0
-        AND d.invd_kode NOT LIKE 'JASA%'
-        ${branchFilter}
-    `;
-    // Catatan: Query di atas disederhanakan. Jika akurasi SUM DISTINCT inv_disc bermasalah karena join one-to-many,
-    // Gunakan query terpisah di frontend atau pendekatan 2 query (Header & Detail) di sini lebih aman & cepat.
+    if (user.cabang !== "KDC") {
+      branchFilter = " AND h.inv_cab = ? ";
+      params.push(user.cabang);
+    }
 
-    // PENDEKATAN LEBIH AMAN & CEPAT (2 Query Ringan)
+    // Gunakan 2 Query Terpisah (Header & Detail) agar lebih ringan & akurat
     const qHeader = `
-        SELECT COUNT(*) as trx, SUM(inv_disc) as disc, SUM(inv_ppn) as ppn 
-        FROM tinv_hdr h WHERE h.inv_tanggal = ? AND h.inv_sts_pro = 0 ${branchFilter}
+        SELECT 
+            COUNT(*) as trx, 
+            SUM(inv_disc) as disc, 
+            SUM(inv_ppn) as ppn 
+        FROM tinv_hdr h 
+        WHERE h.inv_tanggal = ? 
+          AND h.inv_sts_pro = 0 
+          ${branchFilter}
     `;
+    
     const qDetail = `
-        SELECT SUM(d.invd_jumlah) as qty, SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) as gross
+        SELECT 
+            SUM(d.invd_jumlah) as qty, 
+            SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) as gross
         FROM tinv_hdr h 
         JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
-        WHERE h.inv_tanggal = ? AND h.inv_sts_pro = 0 AND d.invd_kode NOT LIKE 'JASA%' ${branchFilter}
+        WHERE h.inv_tanggal = ? 
+          AND h.inv_sts_pro = 0 
+          AND d.invd_kode NOT LIKE 'JASA%' 
+          ${branchFilter}
     `;
 
     const [headerRows] = await pool.query(qHeader, params);
     const [detailRows] = await pool.query(qDetail, params);
 
+    // --- FIX LOGIC: Casting ke Number secara eksplisit ---
+    // MySQL driver kadang mengembalikan Decimal sebagai String, jadi kita paksa ke Number dulu
+    const gross = Number(detailRows[0]?.gross) || 0;
+    const disc  = Number(headerRows[0]?.disc) || 0;
+    const ppn   = Number(headerRows[0]?.ppn) || 0;
+    
     const stats = {
-      todayTransactions: headerRows[0].trx || 0,
-      todayQty: detailRows[0].qty || 0,
-      todaySales:
-        (detailRows[0].gross || 0) -
-        (headerRows[0].disc || 0) +
-        (headerRows[0].ppn || 0),
+        todayTransactions: Number(headerRows[0]?.trx) || 0,
+        todayQty: Number(detailRows[0]?.qty) || 0,
+        todaySales: gross - disc + ppn // Sekarang operasi matematika pasti aman
     };
 
     res.json(stats);
