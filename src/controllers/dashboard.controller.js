@@ -118,7 +118,7 @@ const getBranchPerformance = async (req, res) => {
         ), 1) as target -- Default 1 biar ga divide by zero
 
       FROM tgudang g
-        AND g.gdg_kode != 'KDC' -- Exclude Head Office
+      WHERE g.gdg_kode != 'KDC' -- Exclude Head Office
       ORDER BY nominal DESC
     `;
 
