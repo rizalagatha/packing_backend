@@ -277,21 +277,23 @@ const findProductByBarcode = async (req, res) => {
 
 /**
  * 5. Lookup Permintaan Open (Search Modal)
- * Logic disamakan dengan SuratJalanScreen (Referensi Delphi)
+ * REVISI: Disamakan logikanya dengan SuratJalanScreen (Cek tdc_sj_hdr)
  */
 const searchPermintaanOpen = async (req, res) => {
   const { term = '', page = 1, storeKode } = req.query;
   
+  // Debugging: Cek apa yang diterima backend
+  console.log("[API] Search Permintaan:", { term, page, storeKode });
+
   try {
     if (!storeKode) {
-        return res.json([]); // Wajib ada store
+        return res.json([]); 
     }
 
     const itemsPerPage = 20;
     const offset = (page - 1) * itemsPerPage;
     const searchTerm = `%${term}%`;
 
-    // Params urut sesuai query di bawah
     const params = [
         storeKode,      // 1. LEFT(mt_nomor, 3)
         searchTerm,     // 2. LIKE mt_nomor
@@ -310,15 +312,17 @@ const searchPermintaanOpen = async (req, res) => {
             h.mt_ket AS keterangan
         FROM tmintabarang_hdr h
         WHERE 
-            -- 1. Filter Store berdasarkan 3 digit awal nomor permintaan
+            -- 1. Filter Store (Wajib sama 3 digit awal)
             LEFT(h.mt_nomor, 3) = ? 
             
-            -- 2. Pastikan belum ada di Packing List lain (Agar tidak dobel)
-            AND h.mt_nomor NOT IN (
-                SELECT pl_mt_nomor FROM tpacking_list_hdr WHERE pl_mt_nomor IS NOT NULL AND pl_mt_nomor <> ""
-            )
+            -- 2. Pastikan Status Close = N (Belum ditutup manual)
+            AND h.mt_close = 'N'
+
+            -- 3. VALIDASI: Belum jadi Surat Jalan (Sesuai Referensi Lama)
+            -- (Kita gunakan logika Surat Jalan agar data muncul dulu)
+            AND h.mt_nomor NOT IN (SELECT sj_mt_nomor FROM tdc_sj_hdr WHERE sj_mt_nomor <> "")
             
-            -- 3. Pencarian Text
+            -- 4. Pencarian Text
             AND (
                 h.mt_nomor LIKE ? 
                 OR h.mt_tanggal LIKE ? 
@@ -330,6 +334,8 @@ const searchPermintaanOpen = async (req, res) => {
     `;
 
     const [rows] = await pool.query(query, params);
+    
+    console.log(`[API] Found ${rows.length} permintaan for store ${storeKode}`);
     res.json(rows);
 
   } catch (error) {
