@@ -77,6 +77,9 @@ app.use('/api/invoices', invoiceRoutes);
 const stokOpnameRoutes = require("./src/routes/stokOpname.routes.js");
 app.use("/api/stok-opname", stokOpnameRoutes);
 
+const dashboardRoutes = require("./src/routes/dashboard.routes");
+app.use("/api/dashboard", dashboardRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
