@@ -24,4 +24,10 @@ router.get("/pending-actions", dashboardController.getPendingActions);
 // --- 6. TARGET PENJUALAN (BARU) ---
 router.get("/sales-target-summary", dashboardController.getSalesTargetSummary);
 
+// 7. List Total Piutang Per Cabang
+router.get("/piutang-per-cabang", dashboardController.getPiutangPerCabang);
+
+// 8. Detail Invoice Piutang Per Cabang
+router.get("/piutang-detail/:cabang", dashboardController.getBranchPiutangDetail);
+
 module.exports = router;

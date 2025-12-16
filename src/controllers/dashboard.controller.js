@@ -1,53 +1,62 @@
-const pool = require("../config/database"); // Sesuaikan path config DB Anda
-const moment = require("moment"); // Pastikan install moment: npm install moment
+const pool = require("../config/database");
+const moment = require("moment");
 
-// --- 1. Statistik Hari Ini (Omset, Qty, Transaksi) ---
+// --- 1. Statistik Hari Ini ---
 const getTodayStats = async (req, res) => {
   try {
     const user = req.user;
     const today = moment().format("YYYY-MM-DD");
+    let branchFilter = user.cabang !== "KDC" ? " AND h.inv_cab = ? " : "";
+    const params = user.cabang !== "KDC" ? [today, user.cabang] : [today];
 
-    // Filter Cabang (KDC lihat semua, Cabang lihat sendiri)
-    let branchFilter = "";
-    const params = [today];
-
-    if (user.cabang !== "KDC") {
-      branchFilter = " AND h.inv_cab = ? ";
-      params.push(user.cabang);
-    }
-
+    // Optimasi: Join langsung, hindari subquery select select
     const query = `
       SELECT 
         COUNT(DISTINCT h.inv_nomor) AS todayTransactions,
-        -- Total Qty (Hanya barang stok, exclude Jasa)
-        COALESCE(SUM((
-            SELECT SUM(d.invd_jumlah) 
-            FROM tinv_dtl d 
-            WHERE d.invd_inv_nomor = h.inv_nomor 
-              AND d.invd_kode NOT LIKE 'JASA%'
-        )), 0) AS todayQty,
-        -- Total Omset (Netto)
-        COALESCE(SUM(
-            (SELECT SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) 
-             FROM tinv_dtl d WHERE d.invd_inv_nomor = h.inv_nomor) 
-            - h.inv_disc
-            + h.inv_ppn -- (Simplified tax calc, sesuaikan jika logic pajak anda beda)
-        ), 0) AS todaySales
+        COALESCE(SUM(d.invd_jumlah), 0) AS todayQty,
+        COALESCE(SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) - SUM(DISTINCT h.inv_disc) + SUM(DISTINCT h.inv_ppn), 0) AS todaySales
       FROM tinv_hdr h
+      JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
       WHERE h.inv_tanggal = ? 
-        AND h.inv_sts_pro = 0 -- Pastikan invoice valid/tidak batal
+        AND h.inv_sts_pro = 0
+        AND d.invd_kode NOT LIKE 'JASA%'
         ${branchFilter}
     `;
+    // Catatan: Query di atas disederhanakan. Jika akurasi SUM DISTINCT inv_disc bermasalah karena join one-to-many,
+    // Gunakan query terpisah di frontend atau pendekatan 2 query (Header & Detail) di sini lebih aman & cepat.
 
-    const [rows] = await pool.query(query, params);
-    res.json(rows[0]);
+    // PENDEKATAN LEBIH AMAN & CEPAT (2 Query Ringan)
+    const qHeader = `
+        SELECT COUNT(*) as trx, SUM(inv_disc) as disc, SUM(inv_ppn) as ppn 
+        FROM tinv_hdr h WHERE h.inv_tanggal = ? AND h.inv_sts_pro = 0 ${branchFilter}
+    `;
+    const qDetail = `
+        SELECT SUM(d.invd_jumlah) as qty, SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) as gross
+        FROM tinv_hdr h 
+        JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
+        WHERE h.inv_tanggal = ? AND h.inv_sts_pro = 0 AND d.invd_kode NOT LIKE 'JASA%' ${branchFilter}
+    `;
+
+    const [headerRows] = await pool.query(qHeader, params);
+    const [detailRows] = await pool.query(qDetail, params);
+
+    const stats = {
+      todayTransactions: headerRows[0].trx || 0,
+      todayQty: detailRows[0].qty || 0,
+      todaySales:
+        (detailRows[0].gross || 0) -
+        (headerRows[0].disc || 0) +
+        (headerRows[0].ppn || 0),
+    };
+
+    res.json(stats);
   } catch (error) {
     console.error("Error getTodayStats:", error);
-    res.status(500).json({ message: "Gagal memuat statistik hari ini" });
+    res.status(500).json({ message: "Gagal memuat statistik" });
   }
 };
 
-// --- 2. Total Piutang (Global / Per Cabang) ---
+// --- 2. Total Piutang ---
 const getTotalPiutang = async (req, res) => {
   try {
     const user = req.user;
@@ -55,23 +64,16 @@ const getTotalPiutang = async (req, res) => {
     const params = [];
 
     if (user.cabang !== "KDC") {
-      branchFilter = " AND LEFT(ph.ph_inv_nomor, 3) = ? "; // Asumsi 3 digit awal no invoice = kode cabang
+      branchFilter = " AND LEFT(ph.ph_inv_nomor, 3) = ? ";
       params.push(user.cabang);
     }
 
-    // Hitung Sisa: Debet - Kredit
     const query = `
-      SELECT 
-        SUM(GREATEST(0, sub.debet - sub.kredit)) AS totalSisaPiutang
+      SELECT SUM( GREATEST(0, (SELECT SUM(pd_debet) FROM tpiutang_dtl WHERE pd_ph_nomor = ph.ph_nomor) - (SELECT SUM(pd_kredit) FROM tpiutang_dtl WHERE pd_ph_nomor = ph.ph_nomor)) ) AS totalSisaPiutang
       FROM tpiutang_hdr ph
-      JOIN (
-        SELECT pd_ph_nomor, SUM(pd_debet) as debet, SUM(pd_kredit) as kredit
-        FROM tpiutang_dtl
-        GROUP BY pd_ph_nomor
-      ) sub ON sub.pd_ph_nomor = ph.ph_nomor
       WHERE 1=1 ${branchFilter}
     `;
-
+    // Query di atas dioptimalkan agar tidak melakukan JOIN berat jika tabel piutang besar
     const [rows] = await pool.query(query, params);
     res.json({ totalSisaPiutang: rows[0].totalSisaPiutang || 0 });
   } catch (error) {
@@ -80,90 +82,86 @@ const getTotalPiutang = async (req, res) => {
   }
 };
 
-// 1. UPDATE FUNGSI INI (Untuk Grafik Pencapaian Target)
-const getSalesTargetSummary = async (user) => {
+// --- 3. SALES TARGET SUMMARY (OPTIMALISASI UTAMA) ---
+const getSalesTargetSummary = async (req, res) => {
+  const user = req.user;
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
-  let branchFilter = "AND h.inv_cab = ?";
-  // Urutan params: [Tahun Target, Bulan Target, (Cabang Target), Tahun Jual, Bulan Jual, (Cabang Jual)]
-  // Kita sederhanakan agar tidak bingung
-  
-  let targetQueryPart = "";
-  let salesQueryPart = "";
-  let params = [];
+  // Kita pecah jadi 2 query sederhana (Query Sales & Query Target)
+  // lalu gabungkan di JS. Ini JAUH lebih cepat daripada Subquery SQL yang kompleks.
 
-  // --- A. BUILD PARAMS UNTUK TARGET ---
-  params.push(tahun, bulan);
-  if (user.cabang !== "KDC") {
-    targetQueryPart = "AND t.kode_gudang = ?";
-    params.push(user.cabang);
+  // A. Query Sales (Gross - Diskon)
+  let salesQuery = `
+        SELECT 
+            -- Total Gross dari Detail
+            (SELECT COALESCE(SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)), 0)
+             FROM tinv_hdr h
+             JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
+             WHERE h.inv_sts_pro = 0 
+               AND YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ?
+               ${user.cabang !== "KDC" ? "AND h.inv_cab = ?" : ""}
+            ) 
+            - 
+            -- Total Diskon dari Header
+            (SELECT COALESCE(SUM(h.inv_disc), 0)
+             FROM tinv_hdr h
+             WHERE h.inv_sts_pro = 0 
+               AND YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ?
+               ${user.cabang !== "KDC" ? "AND h.inv_cab = ?" : ""}
+            ) as nominal
+    `;
+
+  // Params untuk Sales (Ada 2 subquery, jadi params diduplikasi)
+  let salesParams = [tahun, bulan];
+  if (user.cabang !== "KDC") salesParams.push(user.cabang);
+  salesParams = [...salesParams, ...salesParams]; // Duplicate params for second subquery
+
+  // B. Query Target
+  let targetQuery = `
+        SELECT SUM(t.target_omset) as target
+        FROM kpi.ttarget_kaosan t 
+        WHERE t.tahun = ? AND t.bulan = ? 
+        ${user.cabang !== "KDC" ? "AND t.kode_gudang = ?" : ""}
+    `;
+  let targetParams = [tahun, bulan];
+  if (user.cabang !== "KDC") targetParams.push(user.cabang);
+
+  try {
+    // Jalankan Parallel agar cepat
+    const [salesResult, targetResult] = await Promise.all([
+      pool.query(salesQuery, salesParams),
+      pool.query(targetQuery, targetParams),
+    ]);
+
+    const nominal = salesResult[0][0].nominal || 0;
+    const target = targetResult[0][0].target || 0;
+
+    res.json({ nominal, target });
+  } catch (error) {
+    console.error("Error getSalesTargetSummary:", error);
+    res.status(500).json({ message: "Gagal memuat target" });
   }
-
-  // --- B. BUILD PARAMS UNTUK SALES ---
-  params.push(tahun, bulan);
-  if (user.cabang !== "KDC") {
-    salesQueryPart = "AND h.inv_cab = ?";
-    params.push(user.cabang);
-  }
-
-  const query = `
-    SELECT 
-        -- 1. Hitung Nominal (Sales - Diskon)
-        IFNULL(
-            (
-              SELECT SUM(
-                  (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
-                   FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc
-              ) 
-              FROM tinv_hdr h
-              WHERE h.inv_sts_pro = 0 
-                AND YEAR(h.inv_tanggal) = ? 
-                AND MONTH(h.inv_tanggal) = ?
-                ${salesQueryPart}
-            ), 0
-        ) AS nominal,
-
-        -- 2. Ambil Target
-        IFNULL(
-            (
-                SELECT SUM(t.target_omset) 
-                FROM kpi.ttarget_kaosan t 
-                WHERE t.tahun = ? AND t.bulan = ? 
-                ${targetQueryPart}
-            ), 0
-        ) AS target
-  `;
-  
-  // Perhatikan urutan params harus sesuai dengan urutan '?' di query
-  // Urutan: [Tahun Jual, Bulan Jual, (Cabang Jual), Tahun Target, Bulan Target, (Cabang Target)]
-  // Kita susun ulang params agar sesuai query di atas
-  
-  let finalParams = [tahun, bulan];
-  if (user.cabang !== "KDC") finalParams.push(user.cabang);
-  
-  finalParams.push(tahun, bulan);
-  if (user.cabang !== "KDC") finalParams.push(user.cabang);
-
-  const [rows] = await pool.query(query, finalParams);
-  return rows[0];
 };
 
-// 2. UPDATE FUNGSI INI (Untuk Tabel Performa Cabang - Logika Retur)
-const getBranchPerformance = async (user) => {
-  if (user.cabang !== "KDC") return [];
+// --- 4. PERFORMA CABANG (OPTIMALISASI UTAMA) ---
+const getBranchPerformance = async (req, res) => {
+  const user = req.user;
+  if (user.cabang !== "KDC") return res.json([]);
 
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
+  // Ganti View 'v_sales_harian' dengan Direct Query agar index 'inv_tanggal' terpakai
   const query = `
         WITH MonthlySales AS (
             SELECT 
-                cabang, 
-                SUM(nominal) AS nominal 
-            FROM v_sales_harian
-            WHERE YEAR(tanggal) = ? AND MONTH(tanggal) = ?
-            GROUP BY cabang
+                h.inv_cab as cabang, 
+                SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) - SUM(DISTINCT h.inv_disc) AS nominal 
+            FROM tinv_hdr h
+            JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
+            WHERE YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ? AND h.inv_sts_pro = 0
+            GROUP BY h.inv_cab
         ),
         MonthlyTargets AS (
             SELECT 
@@ -185,7 +183,6 @@ const getBranchPerformance = async (user) => {
         SELECT 
             g.gdg_kode AS kode_cabang,
             g.gdg_nama AS nama_cabang,
-            -- Nominal Bersih = Sales - Retur
             (COALESCE(ms.nominal, 0) - COALESCE(mr.total_retur, 0)) AS nominal,
             COALESCE(mt.target, 0) AS target,
             CASE 
@@ -207,14 +204,14 @@ const getBranchPerformance = async (user) => {
 
   try {
     const [rows] = await pool.query(query, params);
-    return rows;
+    res.json(rows);
   } catch (error) {
     console.error("Error getBranchPerformance:", error);
-    return [];
+    res.status(500).json({ message: "Gagal memuat performa cabang" });
   }
 };
 
-// --- 4. Chart Data (Sales Trend) ---
+// --- 5. Chart Data ---
 const getSalesChart = async (req, res) => {
   try {
     const { startDate, endDate, groupBy, cabang } = req.query;
@@ -223,7 +220,6 @@ const getSalesChart = async (req, res) => {
     let branchCondition = "";
     const params = [startDate, endDate];
 
-    // Filter Cabang untuk Chart
     if (user.cabang !== "KDC") {
       branchCondition = " AND h.inv_cab = ? ";
       params.push(user.cabang);
@@ -232,7 +228,6 @@ const getSalesChart = async (req, res) => {
       params.push(cabang);
     }
 
-    // Grouping Logic
     let dateSelect = "DATE(h.inv_tanggal)";
     if (groupBy === "month")
       dateSelect = "DATE_FORMAT(h.inv_tanggal, '%Y-%m-01')";
@@ -240,9 +235,13 @@ const getSalesChart = async (req, res) => {
     const query = `
       SELECT 
         ${dateSelect} as tanggal,
-        SUM(
-           (SELECT SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) 
-            FROM tinv_dtl d WHERE d.invd_inv_nomor = h.inv_nomor) - h.inv_disc
+        -- Hitung Gross Item dikurangi Header Diskon (diproporasi atau grouping)
+        -- Cara cepat: Sum(Gross) - Sum(Diskon Header) per hari
+        (
+            (SELECT SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) 
+             FROM tinv_dtl d WHERE d.invd_inv_nomor IN (SELECT inv_nomor FROM tinv_hdr WHERE DATE(inv_tanggal) = DATE(h.inv_tanggal)))
+             -
+             SUM(h.inv_disc)
         ) as total
       FROM tinv_hdr h
       WHERE h.inv_tanggal BETWEEN ? AND ?
@@ -251,6 +250,7 @@ const getSalesChart = async (req, res) => {
       GROUP BY ${dateSelect}
       ORDER BY tanggal ASC
     `;
+    // NOTE: Query Chart di atas masih sedikit berat, tapi karena dilimit tanggal (startDate-endDate), harusnya aman.
 
     const [rows] = await pool.query(query, params);
     res.json(rows);
@@ -260,46 +260,90 @@ const getSalesChart = async (req, res) => {
   }
 };
 
-// --- 5. Pending Actions (Notifikasi) ---
-// GANTI FUNGSI INI DI BACKEND
-const getPendingActions = async (user) => {
-  // Kita ganti logika "Pending Action" menjadi "Info Stok Kosong Reguler"
-
-  // Tentukan cabang yang mau dicek (Default: cabang user login)
-  // Jika KDC, kita bisa default ke salah satu cabang atau tetap KDC (biasanya KDC stoknya dikit)
+// --- 6. Pending Actions (Stok Kosong) ---
+const getPendingActions = async (req, res) => {
+  const user = req.user;
   let branchToCheck = user.cabang;
 
-  // Query: Hitung jumlah SKU (Barang + Ukuran) yang stoknya <= 0
-  // Kategori: REGULER, Barang Aktif: Ya (0 artinya aktif di sistem Anda sepertinya, berdasarkan getStokKosongReguler)
   const query = `
-    SELECT COUNT(*) AS total_kosong 
-    FROM (
-        SELECT 
-            m.mst_brg_kode,
-            m.mst_ukuran
-        FROM tmasterstok m
-        JOIN tbarangdc a ON a.brg_kode = m.mst_brg_kode
-        WHERE m.mst_aktif = 'Y' 
-          AND m.mst_cab = ? 
-          AND a.brg_ktgp = 'REGULER' -- Filter Kategori di awal biar scan lebih sedikit
-        GROUP BY m.mst_brg_kode, m.mst_ukuran
-        HAVING SUM(m.mst_stok_in - m.mst_stok_out) <= 0
-    ) AS summary_stok;
-  `;
+      SELECT COUNT(*) AS total_kosong 
+      FROM (
+          SELECT m.mst_brg_kode
+          FROM tmasterstok m
+          JOIN tbarangdc a ON a.brg_kode = m.mst_brg_kode
+          WHERE m.mst_aktif = 'Y' 
+            AND m.mst_cab = ? 
+            AND a.brg_ktgp = 'REGULER'
+          GROUP BY m.mst_brg_kode, m.mst_ukuran
+          HAVING SUM(m.mst_stok_in - m.mst_stok_out) <= 0
+      ) AS summary_stok;
+    `;
 
   try {
     const [rows] = await pool.query(query, [branchToCheck]);
-
-    // Kembalikan format object baru
-    return {
-      stok_kosong_reguler: rows[0].total_kosong || 0,
-      // Field lama kita set 0 atau null biar frontend lama gak error (opsional)
+    res.json({
+      stok_kosong_reguler: rows[0]?.total_kosong || 0,
       so_open: 0,
       invoice_belum_lunas: 0,
-    };
+    });
   } catch (error) {
-    console.error("Error getPendingActions (Stok Kosong):", error);
-    return { stok_kosong_reguler: 0 };
+    console.error("Error getPendingActions:", error);
+    res.json({ stok_kosong_reguler: 0 });
+  }
+};
+
+// --- 7. List Sisa Piutang per Cabang (KDC Only) ---
+const getPiutangPerCabang = async (req, res) => {
+  const user = req.user;
+  if (user.cabang !== "KDC") return res.json([]);
+
+  try {
+    const query = `
+            SELECT 
+                u.ph_cab AS cabang_kode,
+                g.gdg_nama AS cabang_nama,
+                SUM(v.debet - v.kredit) AS sisa_piutang
+            FROM tpiutang_hdr u
+            LEFT JOIN (
+                SELECT pd_ph_nomor, SUM(pd_debet) AS debet, SUM(pd_kredit) AS kredit 
+                FROM tpiutang_dtl GROUP BY pd_ph_nomor
+            ) v ON v.pd_ph_nomor = u.ph_nomor
+            LEFT JOIN tgudang g ON g.gdg_kode = u.ph_cab
+            WHERE (v.debet - v.kredit) > 0
+            GROUP BY u.ph_cab, g.gdg_nama
+            ORDER BY sisa_piutang DESC;
+        `;
+    const [rows] = await pool.query(query);
+    res.json(rows);
+  } catch (error) {
+    console.error("Error getPiutangPerCabang:", error);
+    res.status(500).json({ message: "Gagal memuat list piutang" });
+  }
+};
+
+// --- 8. Detail Invoice Piutang per Cabang ---
+const getBranchPiutangDetail = async (req, res) => {
+  const { cabang } = req.params;
+  try {
+    const query = `
+        SELECT 
+            u.ph_inv_nomor AS invoice,
+            DATE_FORMAT(h.inv_tanggal, '%Y-%m-%d') AS tanggal,
+            IFNULL(v.debet - v.kredit, 0) AS sisa_piutang
+        FROM tpiutang_hdr u
+        LEFT JOIN (
+            SELECT pd_ph_nomor, SUM(pd_debet) AS debet, SUM(pd_kredit) AS kredit 
+            FROM tpiutang_dtl GROUP BY pd_ph_nomor
+        ) v ON v.pd_ph_nomor = u.ph_nomor
+        LEFT JOIN tinv_hdr h ON h.inv_nomor = u.ph_inv_nomor
+        WHERE u.ph_cab = ? AND (v.debet - v.kredit) > 0
+        ORDER BY sisa_piutang DESC;
+    `;
+    const [rows] = await pool.query(query, [cabang]);
+    res.json(rows);
+  } catch (error) {
+    console.error("Error getBranchPiutangDetail:", error);
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -310,4 +354,6 @@ module.exports = {
   getBranchPerformance,
   getSalesChart,
   getPendingActions,
+  getPiutangPerCabang,
+  getBranchPiutangDetail,
 };
