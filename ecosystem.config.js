@@ -4,6 +4,15 @@ module.exports = {
       // --- APLIKASI PRODUKSI (RESMI) ---
       name: "packing-prod",
       script: "index.js",
+      watch: true,
+      ignore_watch: [
+        "node_modules",
+        ".wwebjs_auth",
+        ".wwebjs_cache",
+        "public",
+        "logs",
+      ],
+      max_memory_restart: "1G",
       env: {
         NODE_ENV: "production",
         PORT: 3000,
@@ -19,6 +28,15 @@ module.exports = {
       // --- APLIKASI TRIAL ---
       name: "packing-trial",
       script: "index.js",
+      watch: true,
+      ignore_watch: [
+        "node_modules",
+        ".wwebjs_auth",
+        ".wwebjs_cache",
+        "public",
+        "logs",
+      ],
+      max_memory_restart: "1G",
       env: {
         NODE_ENV: "production", // Tetap production agar efisien
         PORT: 3002, // PORT BERBEDA
