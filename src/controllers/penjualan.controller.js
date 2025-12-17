@@ -372,7 +372,7 @@ const getPrintData = async (req, res) => {
                 g.gdg_inv_instagram,
                 g.gdg_inv_fb,
                 g.gdg_akun,
-                g.gdg_transferbank
+                g.gdg_transferbank,
 
                 -- Info Customer (TAMBAHAN INI)
                 c.cus_nama,
