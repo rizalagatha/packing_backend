@@ -1,20 +1,30 @@
-const { Client, LocalAuth } = require("whatsapp-web.js");
+const {
+  makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  Browsers,
+  fetchLatestBaileysVersion,
+} = require("@whiskeysockets/baileys");
+const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
 
-// --- SIMPAN SESI DI LUAR PROJECT (Cara kemarin) ---
-const SESSION_DIR = "/var/www/wa_sessions";
+// --- KONFIGURASI SESI ---
+// Simpan di luar folder project agar aman dari PM2
+const SESSION_DIR = "/var/www/wa_sessions_baileys";
 
 if (!fs.existsSync(SESSION_DIR)) {
-  try {
-    fs.mkdirSync(SESSION_DIR, { recursive: true });
-  } catch (err) {
-    console.error("[WA INIT] Gagal akses folder eksternal:", err);
-  }
+  fs.mkdirSync(SESSION_DIR, { recursive: true });
 }
 
+// Simpan instance socket di memori
 const clients = {};
+// Simpan QR code sementara (jika client belum scan)
+const qrStore = {};
 
+/**
+ * HELPER: ID Unik untuk Prod vs Trial
+ */
 const getUniqueId = (storeCode) => {
   const appName = process.env.name || "";
   const appPort = process.env.PORT || "";
@@ -25,152 +35,178 @@ const getUniqueId = (storeCode) => {
   }
 };
 
+/**
+ * Mendapatkan Status Sesi
+ */
 const getSessionInfo = async (storeCode) => {
   const uniqueId = getUniqueId(storeCode);
-  const client = clients[uniqueId];
-  if (!client) return { status: "DISCONNECTED", info: null };
+  const sock = clients[uniqueId];
 
-  try {
-    const state = await client.getState();
-    if (state === "CONNECTED") {
-      const info = client.info;
-      return {
-        status: "CONNECTED",
-        info: {
-          pushname: info.pushname,
-          wid: info.wid,
-          platform: info.platform,
-        },
-      };
-    }
-    return { status: state || "DISCONNECTED", info: null };
-  } catch (error) {
-    return { status: "DISCONNECTED", info: null };
+  if (!sock) return { status: "DISCONNECTED", info: null };
+
+  // Cek apakah user object ada (tandanya sudah login)
+  if (sock.user) {
+    return {
+      status: "CONNECTED",
+      info: {
+        pushname: sock.user.name || "WhatsApp User",
+        wid: { user: sock.user.id.split(":")[0] }, // Ambil nomornya saja
+        platform: "Baileys",
+      },
+    };
   }
+
+  return { status: "DISCONNECTED", info: null };
 };
 
-const createClient = (storeCode) => {
+/**
+ * Inisialisasi Koneksi (Create Client)
+ * Mengembalikan Promise berisi string QR Code
+ */
+const createClient = async (storeCode) => {
   const uniqueId = getUniqueId(storeCode);
+  const sessionPath = path.join(SESSION_DIR, uniqueId);
 
-  return new Promise((resolve, reject) => {
-    console.log(`[WA START] Memulai client untuk ID: ${uniqueId}`);
+  return new Promise(async (resolve, reject) => {
+    console.log(`[BAILEYS] Memulai sesi untuk: ${uniqueId}`);
 
-    if (clients[uniqueId]) {
-      try {
-        clients[uniqueId].destroy();
-      } catch (e) {}
-      delete clients[uniqueId];
+    // Jika sudah ada instance aktif dan terhubung
+    if (clients[uniqueId]?.user) {
+      console.log(`[BAILEYS] ${uniqueId} sudah terhubung.`);
+      // Jika sudah connect, return null (frontend akan anggap connected)
+      // Atau return string khusus
+      resolve(null);
+      return;
     }
 
-    const client = new Client({
-      restartOnAuthFail: true,
-      authStrategy: new LocalAuth({
-        clientId: uniqueId,
-        dataPath: SESSION_DIR,
-      }),
-      // --- TAMBAHAN PENTING: OPTIMASI PUPPETEER ---
-      puppeteer: {
-        headless: true, // atau 'new' jika pakai versi terbaru
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage", // Mengatasi masalah memori di Linux
-          "--disable-accelerated-2d-canvas",
-          "--no-first-run",
-          "--no-zygote",
-          "--single-process",
-          "--disable-gpu",
-          "--disable-extensions", // Matikan ekstensi
-          "--disable-software-rasterizer",
-        ],
-        // Timeout lebih lama agar tidak error saat loading chat banyak
-        timeout: 60000,
-      },
-      // Cache versi WA Web agar tidak download ulang terus (Hemat resource)
-      webVersionCache: {
-        type: "remote",
-        remotePath:
-          "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html",
-      },
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: true, // Tampilkan di log server juga
+      logger: pino({ level: "silent" }), // Supaya log bersih
+      browser: Browsers.macOS("Desktop"), // Agar terlihat seperti WA Web biasa
+      syncFullHistory: false, // Hemat RAM, gak usah load chat lama
     });
 
-    client.on("qr", (qr) => {
-      console.log(`[WA QR] QR Code siap untuk ${uniqueId}`);
-      resolve(qr);
-    });
+    clients[uniqueId] = sock;
 
-    client.on("ready", () => {
-      console.log(`[WA READY] Client ${uniqueId} SIAP digunakan!`);
-      clients[uniqueId] = client;
-    });
+    // --- EVENT LISTENER ---
 
-    client.on("authenticated", () => {
-      console.log(`[WA AUTH] ${uniqueId} Berhasil Login!`);
-    });
+    sock.ev.on("creds.update", saveCreds);
 
-    client.on("auth_failure", (msg) => {
-      console.error(`[WA FAIL] Gagal Auth ${uniqueId}:`, msg);
-    });
+    sock.ev.on("connection.update", (update) => {
+      const { connection, lastDisconnect, qr } = update;
 
-    client.on("disconnected", async (reason) => {
-      console.warn(
-        `[WA DISCONNECT] Client ${uniqueId} PUTUS. Alasan: ${reason}`
-      );
-      try {
-        await client.destroy();
-      } catch (e) {}
-      delete clients[uniqueId];
-    });
+      if (qr) {
+        console.log(`[BAILEYS] QR Baru diterima untuk ${uniqueId}`);
+        qrStore[uniqueId] = qr;
+        resolve(qr); // Kirim QR ke Controller -> Frontend
+      }
 
-    console.log("[WA INIT] Menginisialisasi Puppeteer...");
-    client.initialize().catch((err) => {
-      console.error("[WA INIT ERROR]", err);
-      reject(new Error("Gagal inisialisasi WA Web."));
+      if (connection === "close") {
+        const shouldReconnect =
+          lastDisconnect.error?.output?.statusCode !==
+          DisconnectReason.loggedOut;
+        console.log(
+          `[BAILEYS] Koneksi ${uniqueId} terputus. Reconnect: ${shouldReconnect}`
+        );
+
+        // Hapus session dari memory
+        delete clients[uniqueId];
+
+        if (shouldReconnect) {
+          createClient(storeCode); // Auto Reconnect
+        } else {
+          console.log(`[BAILEYS] ${uniqueId} Logout. Sesi dihapus.`);
+          // Logout manual, hapus folder
+          try {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+          } catch (e) {}
+        }
+      } else if (connection === "open") {
+        console.log(`[BAILEYS] ${uniqueId} BERHASIL TERHUBUNG!`);
+        delete qrStore[uniqueId];
+        // Resolve dengan null karena tidak butuh QR lagi
+        resolve(null);
+      }
     });
   });
 };
 
+/**
+ * Kirim Pesan
+ */
 const sendMessageFromClient = async (storeCode, number, message) => {
   const uniqueId = getUniqueId(storeCode);
-  const client = clients[uniqueId];
+  let sock = clients[uniqueId];
 
-  if (!client) return { success: false, error: "WA belum terhubung." };
+  // Jika socket tidak ada di memori (misal habis restart server),
+  // Coba inisialisasi ulang diam-diam jika file sesi ada
+  if (!sock) {
+    console.log(`[BAILEYS] Socket ${uniqueId} tidak aktif, mencoba restore...`);
+    const sessionPath = path.join(SESSION_DIR, uniqueId);
+    if (fs.existsSync(sessionPath)) {
+      // Restore session (tanpa await QR)
+      createClient(storeCode);
+      // Tunggu sebentar biar connect
+      await new Promise((r) => setTimeout(r, 3000));
+      sock = clients[uniqueId];
+    }
+  }
+
+  if (!sock) {
+    return { success: false, error: "WA Store belum terhubung." };
+  }
 
   try {
-    let formattedNumber = number.toString().replace(/\D/g, "");
-    if (formattedNumber.startsWith("0"))
-      formattedNumber = "62" + formattedNumber.slice(1);
-    if (!formattedNumber.endsWith("@c.us")) formattedNumber += "@c.us";
+    // Format Nomor (08xx -> 628xx@s.whatsapp.net)
+    let id = number.toString().replace(/\D/g, "");
+    if (id.startsWith("0")) id = "62" + id.slice(1);
 
-    await client.sendMessage(formattedNumber, message);
+    // JID Baileys format: nomor@s.whatsapp.net
+    if (!id.endsWith("@s.whatsapp.net")) id = id + "@s.whatsapp.net";
+
+    console.log(`[BAILEYS] Mengirim ke ${id}`);
+
+    await sock.sendMessage(id, { text: message });
+
     return { success: true };
   } catch (error) {
-    console.error(`[WA SEND ERROR]`, error);
+    console.error(`[BAILEYS ERROR]`, error);
     return { success: false, error: "Gagal kirim pesan." };
   }
 };
 
+/**
+ * Hapus Sesi
+ */
 const deleteSession = async (storeCode) => {
   const uniqueId = getUniqueId(storeCode);
-  const client = clients[uniqueId];
-  if (client) {
+  const sock = clients[uniqueId];
+  const sessionPath = path.join(SESSION_DIR, uniqueId);
+
+  console.log(`[BAILEYS] Menghapus sesi ${uniqueId}`);
+
+  if (sock) {
     try {
-      await client.logout();
+      await sock.logout();
     } catch (e) {}
     try {
-      await client.destroy();
+      sock.end();
     } catch (e) {}
     delete clients[uniqueId];
   }
 
-  const specificSessionPath = path.join(SESSION_DIR, `session-${uniqueId}`);
-  setTimeout(() => {
-    try {
-      if (fs.existsSync(specificSessionPath)) {
-        fs.rmSync(specificSessionPath, { recursive: true, force: true });
-      }
-    } catch (error) {}
-  }, 1000);
+  try {
+    if (fs.existsSync(sessionPath)) {
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+    }
+  } catch (e) {
+    console.error("Gagal hapus folder:", e);
+  }
 
   return { success: true };
 };
