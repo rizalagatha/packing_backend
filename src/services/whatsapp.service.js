@@ -2,11 +2,9 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const fs = require("fs");
 const path = require("path");
 
-// --- CARA PAMUNGKAS: SIMPAN SESI DI LUAR PROJECT ---
-// Folder ini tidak akan dipantau oleh PM2, jadi AMAN dari restart loop.
+// --- SIMPAN SESI DI LUAR PROJECT (Cara kemarin) ---
 const SESSION_DIR = "/var/www/wa_sessions";
 
-// Pastikan folder induk ada (Fallback check)
 if (!fs.existsSync(SESSION_DIR)) {
   try {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
@@ -17,15 +15,9 @@ if (!fs.existsSync(SESSION_DIR)) {
 
 const clients = {};
 
-/**
- * HELPER: Membedakan ID Sesi antara Prod dan Trial
- */
 const getUniqueId = (storeCode) => {
-  // Cek environment variable dari PM2
-  // Pastikan di ecosystem.config.js masing-masing app punya nama beda atau port beda
   const appName = process.env.name || "";
   const appPort = process.env.PORT || "";
-
   if (appName.includes("trial") || appPort == "3002") {
     return `${storeCode}_TRIAL`;
   } else {
@@ -36,7 +28,6 @@ const getUniqueId = (storeCode) => {
 const getSessionInfo = async (storeCode) => {
   const uniqueId = getUniqueId(storeCode);
   const client = clients[uniqueId];
-
   if (!client) return { status: "DISCONNECTED", info: null };
 
   try {
@@ -63,7 +54,6 @@ const createClient = (storeCode) => {
 
   return new Promise((resolve, reject) => {
     console.log(`[WA START] Memulai client untuk ID: ${uniqueId}`);
-    console.log(`[WA PATH] Lokasi sesi: ${SESSION_DIR}/session-${uniqueId}`);
 
     if (clients[uniqueId]) {
       try {
@@ -76,20 +66,31 @@ const createClient = (storeCode) => {
       restartOnAuthFail: true,
       authStrategy: new LocalAuth({
         clientId: uniqueId,
-        dataPath: SESSION_DIR, // <--- MENYIMPAN DI LUAR PROJECT
+        dataPath: SESSION_DIR,
       }),
+      // --- TAMBAHAN PENTING: OPTIMASI PUPPETEER ---
       puppeteer: {
-        headless: true,
+        headless: true, // atau 'new' jika pakai versi terbaru
         args: [
           "--no-sandbox",
           "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
+          "--disable-dev-shm-usage", // Mengatasi masalah memori di Linux
           "--disable-accelerated-2d-canvas",
           "--no-first-run",
           "--no-zygote",
           "--single-process",
           "--disable-gpu",
+          "--disable-extensions", // Matikan ekstensi
+          "--disable-software-rasterizer",
         ],
+        // Timeout lebih lama agar tidak error saat loading chat banyak
+        timeout: 60000,
+      },
+      // Cache versi WA Web agar tidak download ulang terus (Hemat resource)
+      webVersionCache: {
+        type: "remote",
+        remotePath:
+          "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html",
       },
     });
 
@@ -131,9 +132,8 @@ const createClient = (storeCode) => {
 
 const sendMessageFromClient = async (storeCode, number, message) => {
   const uniqueId = getUniqueId(storeCode);
-  console.log(`[WA SEND] Request dari ${uniqueId} ke ${number}`);
-
   const client = clients[uniqueId];
+
   if (!client) return { success: false, error: "WA belum terhubung." };
 
   try {
@@ -152,8 +152,6 @@ const sendMessageFromClient = async (storeCode, number, message) => {
 
 const deleteSession = async (storeCode) => {
   const uniqueId = getUniqueId(storeCode);
-  console.log(`[WA DELETE] Menghapus sesi ${uniqueId}`);
-
   const client = clients[uniqueId];
   if (client) {
     try {
@@ -165,17 +163,13 @@ const deleteSession = async (storeCode) => {
     delete clients[uniqueId];
   }
 
-  // Hapus folder di lokasi eksternal
   const specificSessionPath = path.join(SESSION_DIR, `session-${uniqueId}`);
   setTimeout(() => {
     try {
       if (fs.existsSync(specificSessionPath)) {
         fs.rmSync(specificSessionPath, { recursive: true, force: true });
-        console.log(`[WA DELETE] Folder dihapus: ${specificSessionPath}`);
       }
-    } catch (error) {
-      console.error(`[WA DELETE ERROR]`, error.message);
-    }
+    } catch (error) {}
   }, 1000);
 
   return { success: true };
