@@ -22,7 +22,21 @@ const logout = async (req, res) => {
   }
 };
 
+const getSessionStatus = async (req, res) => {
+  try {
+    const storeCode = req.user.cabang;
+    const sessionData = await whatsappService.getSessionInfo(storeCode);
+    res.status(200).json({ success: true, data: sessionData });
+  } catch (error) {
+    console.error("Error getting session status:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mengambil status sesi." });
+  }
+};
+
 module.exports = {
   getQrCode,
   logout,
+  getSessionStatus,
 };

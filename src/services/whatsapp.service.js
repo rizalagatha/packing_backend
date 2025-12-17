@@ -125,9 +125,82 @@ const sendMessage = async (number, message) => {
   }
 };
 
+/**
+ * Mendapatkan informasi status sesi untuk sebuah store
+ */
+const getSessionInfo = async (storeCode) => {
+  const client = clients[storeCode];
+
+  if (!client) {
+    return { status: 'DISCONNECTED', info: null };
+  }
+
+  try {
+    const state = await client.getState();
+    if (state === 'CONNECTED') {
+      const info = client.info;
+      return {
+        status: 'CONNECTED',
+        info: {
+          pushname: info.pushname,
+          wid: info.wid, // Contains user (number), server, etc.
+          platform: info.platform
+        }
+      };
+    } else {
+      return { status: state || 'DISCONNECTED', info: null };
+    }
+  } catch (error) {
+    // If client exists but getState fails (e.g. during initialization), assume initializing or disconnected
+    return { status: 'INITIALIZING', info: null };
+  }
+};
+
+/**
+ * Mengirim pesan DARI spesifik store ke nomor pelanggan
+ */
+const sendMessageFromClient = async (storeCode, number, message) => {
+  // 1. Ambil client milik store tersebut
+  const client = clients[storeCode];
+
+  // 2. Validasi Client
+  if (!client) {
+    return { 
+      success: false, 
+      error: `WA Store ${storeCode} belum terhubung. Silakan scan QR di menu Pengaturan.` 
+    };
+  }
+
+  try {
+    // Cek status koneksi (opsional, kadang getState throw error di puppeteer lama)
+    // const state = await client.getState();
+    // if (state !== 'CONNECTED') throw new Error("WA tidak terhubung.");
+
+    // 3. Format Nomor (Hilangkan 0 atau +62 depan, ganti 62)
+    let formattedNumber = number.toString().replace(/\D/g, ''); // Hapus karakter non-angka
+    if (formattedNumber.startsWith('0')) {
+      formattedNumber = '62' + formattedNumber.slice(1);
+    }
+    if (!formattedNumber.endsWith('@c.us')) {
+      formattedNumber += '@c.us';
+    }
+
+    // 4. Kirim Pesan
+    await client.sendMessage(formattedNumber, message);
+    console.log(`[WA] Pesan terkirim dari ${storeCode} ke ${number}`);
+    return { success: true };
+
+  } catch (error) {
+    console.error(`[WA Error] ${storeCode} -> ${number}:`, error);
+    return { success: false, error: "Gagal mengirim pesan. Pastikan WA aktif." };
+  }
+};
+
 module.exports = {
   createClient,
   sendMessageToStore,
   deleteSession,
   sendMessage,
+  getSessionInfo,
+  sendMessageFromClient,
 };

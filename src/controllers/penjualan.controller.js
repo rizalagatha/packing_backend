@@ -431,26 +431,32 @@ const getPrintData = async (req, res) => {
 const sendReceiptWa = async (req, res) => {
   try {
     const { nomor, hp } = req.body;
+    const { cabang } = req.user; // Ambil kode cabang user yg login (misal: K01)
 
-    // Reuse getPrintData logic or fetch internally
-    // Disini kita format manual string WA-nya
-    // (Anda bisa memanggil fungsi getPrintData internal jika mau, tapi query ulang lebih aman)
+    // Validasi HP
+    if (!hp) return res.status(400).json({ success: false, message: "Nomor HP tujuan tidak ada." });
 
-    // ... (Query data sama seperti getPrintData) ...
-    // Agar singkat, saya asumsikan kita panggil ulang query sederhana
+    // 1. Ambil Data Header & Toko
     const [rows] = await pool.query(
-      `SELECT h.*, g.gdg_inv_nama FROM tinv_hdr h LEFT JOIN tgudang g ON g.gdg_kode = h.inv_cab WHERE inv_nomor = ?`,
+      `SELECT h.*, g.gdg_inv_nama 
+       FROM tinv_hdr h 
+       LEFT JOIN tgudang g ON g.gdg_kode = h.inv_cab 
+       WHERE inv_nomor = ?`,
       [nomor]
     );
-    if (!rows.length)
-      return res.status(404).json({ message: "Invoice not found" });
+    if (!rows.length) return res.status(404).json({ message: "Invoice not found" });
     const hdr = rows[0];
 
+    // 2. Ambil Detail Barang
     const [dtl] = await pool.query(
-      `SELECT d.*, b.brg_jeniskaos FROM tinv_dtl d LEFT JOIN tbarangdc b ON b.brg_kode = d.invd_kode WHERE invd_inv_nomor = ?`,
+      `SELECT d.*, b.brg_jeniskaos 
+       FROM tinv_dtl d 
+       LEFT JOIN tbarangdc b ON b.brg_kode = d.invd_kode 
+       WHERE invd_inv_nomor = ?`,
       [nomor]
     );
 
+    // 3. Format Pesan WhatsApp
     let message = `*STRUK BELANJA - ${hdr.gdg_inv_nama}*\n`;
     message += `No: ${hdr.inv_nomor}\n`;
     message += `Tgl: ${format(new Date(hdr.inv_tanggal), "dd-MM-yyyy")}\n`;
@@ -460,29 +466,38 @@ const sendReceiptWa = async (req, res) => {
     dtl.forEach((d) => {
       const total = d.invd_jumlah * (d.invd_harga - d.invd_diskon);
       subTotal += total;
+      // Nama barang disingkat jika perlu, atau full
       message += `${d.brg_jeniskaos} (${d.invd_ukuran})\n`;
       if (d.invd_diskon > 0) {
-        message += `${d.invd_jumlah} x ${d.invd_harga} (Disc ${d.invd_diskon}) = ${total}\n`;
+        message += `${d.invd_jumlah} x ${parseInt(d.invd_harga).toLocaleString('id-ID')} (Disc ${parseInt(d.invd_diskon).toLocaleString('id-ID')}) = ${total.toLocaleString('id-ID')}\n`;
       } else {
-        message += `${d.invd_jumlah} x ${d.invd_harga} = ${total}\n`;
+        message += `${d.invd_jumlah} x ${parseInt(d.invd_harga).toLocaleString('id-ID')} = ${total.toLocaleString('id-ID')}\n`;
       }
     });
 
+    const grandTotal = subTotal - hdr.inv_disc;
+
     message += `--------------------------------\n`;
-    message += `Total: Rp ${subTotal}\n`;
-    if (hdr.inv_disc > 0) message += `Diskon: -Rp ${hdr.inv_disc}\n`;
-    message += `*Grand Total: Rp ${subTotal - hdr.inv_disc}*\n`;
-    message += `Bayar: Rp ${hdr.inv_bayar}\n`;
-    message += `Kembali: Rp ${hdr.inv_kembali}\n`;
+    message += `Total: Rp ${subTotal.toLocaleString('id-ID')}\n`;
+    if (hdr.inv_disc > 0) message += `Diskon: -Rp ${parseInt(hdr.inv_disc).toLocaleString('id-ID')}\n`;
+    message += `*Grand Total: Rp ${grandTotal.toLocaleString('id-ID')}*\n`;
+    message += `Bayar: Rp ${parseInt(hdr.inv_bayar).toLocaleString('id-ID')}\n`;
+    message += `Kembali: Rp ${parseInt(hdr.inv_kembali).toLocaleString('id-ID')}\n`;
     message += `\nTerima kasih telah berbelanja!`;
 
-    // Kirim via Service WA (Sesuaikan dengan service WA Anda)
+    // 4. Kirim Menggunakan Service Baru
     const whatsappService = require("../services/whatsapp.service");
-    await whatsappService.sendMessage(hp, message); // Asumsi fungsi ini ada
+    
+    // Kirim dari 'cabang' user ke 'hp' pelanggan
+    const result = await whatsappService.sendMessageFromClient(cabang, hp, message);
 
-    res
-      .status(200)
-      .json({ success: true, message: "Struk berhasil dikirim ke WhatsApp." });
+    if (result.success) {
+        res.status(200).json({ success: true, message: "Struk berhasil dikirim ke WhatsApp." });
+    } else {
+        // Jika gagal (misal WA belum connect), kembalikan error agar frontend tau
+        res.status(400).json({ success: false, message: result.error });
+    }
+
   } catch (error) {
     console.error("Error sendReceiptWa:", error);
     res.status(500).json({ success: false, message: error.message });
