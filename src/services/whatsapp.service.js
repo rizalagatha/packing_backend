@@ -143,40 +143,44 @@ const sendMessageFromClient = async (storeCode, number, message) => {
   const uniqueId = getUniqueId(storeCode);
   let sock = clients[uniqueId];
 
-  // Jika socket tidak ada di memori (misal habis restart server),
-  // Coba inisialisasi ulang diam-diam jika file sesi ada
+  // Cek koneksi socket
   if (!sock) {
-    console.log(`[BAILEYS] Socket ${uniqueId} tidak aktif, mencoba restore...`);
-    const sessionPath = path.join(SESSION_DIR, uniqueId);
-    if (fs.existsSync(sessionPath)) {
-      // Restore session (tanpa await QR)
-      createClient(storeCode);
-      // Tunggu sebentar biar connect
-      await new Promise((r) => setTimeout(r, 3000));
-      sock = clients[uniqueId];
-    }
-  }
-
-  if (!sock) {
-    return { success: false, error: "WA Store belum terhubung." };
+    console.log(`[BAILEYS] Socket ${uniqueId} tidak aktif.`);
+    return {
+      success: false,
+      error: "WA Store belum terhubung. Silakan scan ulang.",
+    };
   }
 
   try {
-    // Format Nomor (08xx -> 628xx@s.whatsapp.net)
+    // 1. Format JID (Jabber ID) WhatsApp
+    // number yang masuk dari controller sudah bersih (628...), tapi kita pastikan lagi
     let id = number.toString().replace(/\D/g, "");
     if (id.startsWith("0")) id = "62" + id.slice(1);
 
-    // JID Baileys format: nomor@s.whatsapp.net
-    if (!id.endsWith("@s.whatsapp.net")) id = id + "@s.whatsapp.net";
+    // Tambahkan suffix domain WA
+    const jid = id + "@s.whatsapp.net";
 
-    console.log(`[BAILEYS] Mengirim ke ${id}`);
+    console.log(`[BAILEYS] Mengirim pesan dari ${uniqueId} ke ${jid}`);
 
-    await sock.sendMessage(id, { text: message });
-
-    return { success: true };
+    // 2. [OPSIONAL] Cek apakah nomor terdaftar di WA
+    // Fitur ini memastikan nomor valid sebelum kirim
+    const [result] = await sock.onWhatsApp(jid);
+    if (result?.exists) {
+      // 3. Kirim Pesan
+      await sock.sendMessage(jid, { text: message });
+      return { success: true };
+    } else {
+      console.warn(`[BAILEYS] Nomor ${id} tidak terdaftar di WA.`);
+      return {
+        success: false,
+        error: "Nomor tersebut tidak terdaftar di WhatsApp.",
+      };
+    }
   } catch (error) {
     console.error(`[BAILEYS ERROR]`, error);
-    return { success: false, error: "Gagal kirim pesan." };
+    // Tangani jika socket putus tiba-tiba
+    return { success: false, error: "Gagal kirim. Coba scan ulang QR." };
   }
 };
 
