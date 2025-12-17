@@ -380,6 +380,7 @@ const getPrintData = async (req, res) => {
 
             FROM tinv_hdr h
             LEFT JOIN tgudang g ON g.gdg_kode = h.inv_cab
+            LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode
             WHERE h.inv_nomor = ?
         `;
 
