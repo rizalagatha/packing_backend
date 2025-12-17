@@ -2,14 +2,16 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const fs = require("fs");
 const path = require("path");
 
-// --- KONFIGURASI PATH SESI ---
-const SESSION_DIR = path.join(process.cwd(), ".wwebjs_auth");
+// --- CARA PAMUNGKAS: SIMPAN SESI DI LUAR PROJECT ---
+// Folder ini tidak akan dipantau oleh PM2, jadi AMAN dari restart loop.
+const SESSION_DIR = "/var/www/wa_sessions";
 
+// Pastikan folder induk ada (Fallback check)
 if (!fs.existsSync(SESSION_DIR)) {
   try {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
   } catch (err) {
-    console.error("[WA INIT] Gagal membuat folder sesi:", err);
+    console.error("[WA INIT] Gagal akses folder eksternal:", err);
   }
 }
 
@@ -17,31 +19,25 @@ const clients = {};
 
 /**
  * HELPER: Membedakan ID Sesi antara Prod dan Trial
- * Agar folder sesinya tidak bentrok.
  */
 const getUniqueId = (storeCode) => {
-  // Cek apakah aplikasi ini berjalan di port Trial (3002) atau namanya mengandung 'trial'
-  const isTrial =
-    process.env.PORT == 3002 ||
-    (process.env.name && process.env.name.includes("trial"));
+  // Cek environment variable dari PM2
+  // Pastikan di ecosystem.config.js masing-masing app punya nama beda atau port beda
+  const appName = process.env.name || "";
+  const appPort = process.env.PORT || "";
 
-  if (isTrial) {
-    return `${storeCode}_TRIAL`; // Hasil: K06_TRIAL
+  if (appName.includes("trial") || appPort == "3002") {
+    return `${storeCode}_TRIAL`;
   } else {
-    return `${storeCode}_PROD`; // Hasil: K06_PROD
+    return `${storeCode}_PROD`;
   }
 };
 
-/**
- * Mendapatkan informasi status sesi
- */
 const getSessionInfo = async (storeCode) => {
-  const uniqueId = getUniqueId(storeCode); // Gunakan ID Unik
+  const uniqueId = getUniqueId(storeCode);
   const client = clients[uniqueId];
 
-  if (!client) {
-    return { status: "DISCONNECTED", info: null };
-  }
+  if (!client) return { status: "DISCONNECTED", info: null };
 
   try {
     const state = await client.getState();
@@ -62,17 +58,14 @@ const getSessionInfo = async (storeCode) => {
   }
 };
 
-/**
- * Membuat Client Baru
- */
 const createClient = (storeCode) => {
-  const uniqueId = getUniqueId(storeCode); // Gunakan ID Unik
+  const uniqueId = getUniqueId(storeCode);
 
   return new Promise((resolve, reject) => {
-    console.log(`[WA START] Memulai client untuk ID Unik: ${uniqueId}`);
+    console.log(`[WA START] Memulai client untuk ID: ${uniqueId}`);
+    console.log(`[WA PATH] Lokasi sesi: ${SESSION_DIR}/session-${uniqueId}`);
 
     if (clients[uniqueId]) {
-      console.log(`[WA START] Menutup sesi lama ${uniqueId}...`);
       try {
         clients[uniqueId].destroy();
       } catch (e) {}
@@ -82,8 +75,8 @@ const createClient = (storeCode) => {
     const client = new Client({
       restartOnAuthFail: true,
       authStrategy: new LocalAuth({
-        clientId: uniqueId, // <--- INI KUNCINYA (Folder sesi akan beda nama)
-        dataPath: SESSION_DIR,
+        clientId: uniqueId,
+        dataPath: SESSION_DIR, // <--- MENYIMPAN DI LUAR PROJECT
       }),
       puppeteer: {
         headless: true,
@@ -115,27 +108,17 @@ const createClient = (storeCode) => {
     });
 
     client.on("auth_failure", (msg) => {
-      console.error(`[WA FAIL] Autentikasi GAGAL ${uniqueId}:`, msg);
-      deleteSession(storeCode); // Panggil deleteSession (pakai storeCode asli, nanti di-convert di dalam)
+      console.error(`[WA FAIL] Gagal Auth ${uniqueId}:`, msg);
     });
 
     client.on("disconnected", async (reason) => {
       console.warn(
-        `[WA DISCONNECT] Client ${uniqueId} TERPUTUS. Alasan: ${reason}`
+        `[WA DISCONNECT] Client ${uniqueId} PUTUS. Alasan: ${reason}`
       );
       try {
         await client.destroy();
       } catch (e) {}
       delete clients[uniqueId];
-
-      if (reason === "LOGOUT" || reason === "CONFLICT") {
-        // Hapus folder sesi spesifik
-        const specificPath = path.join(SESSION_DIR, `session-${uniqueId}`);
-        try {
-          if (fs.existsSync(specificPath))
-            fs.rmSync(specificPath, { recursive: true, force: true });
-        } catch (e) {}
-      }
     });
 
     console.log("[WA INIT] Menginisialisasi Puppeteer...");
@@ -146,21 +129,12 @@ const createClient = (storeCode) => {
   });
 };
 
-/**
- * Mengirim pesan
- */
 const sendMessageFromClient = async (storeCode, number, message) => {
-  const uniqueId = getUniqueId(storeCode); // Gunakan ID Unik
+  const uniqueId = getUniqueId(storeCode);
   console.log(`[WA SEND] Request dari ${uniqueId} ke ${number}`);
 
   const client = clients[uniqueId];
-
-  if (!client) {
-    return {
-      success: false,
-      error: `WA Store ${storeCode} (${uniqueId}) belum terhubung.`,
-    };
-  }
+  if (!client) return { success: false, error: "WA belum terhubung." };
 
   try {
     let formattedNumber = number.toString().replace(/\D/g, "");
@@ -176,11 +150,8 @@ const sendMessageFromClient = async (storeCode, number, message) => {
   }
 };
 
-/**
- * Hapus Sesi
- */
 const deleteSession = async (storeCode) => {
-  const uniqueId = getUniqueId(storeCode); // Gunakan ID Unik
+  const uniqueId = getUniqueId(storeCode);
   console.log(`[WA DELETE] Menghapus sesi ${uniqueId}`);
 
   const client = clients[uniqueId];
@@ -194,14 +165,13 @@ const deleteSession = async (storeCode) => {
     delete clients[uniqueId];
   }
 
-  // Hapus folder fisik session-K06_PROD atau session-K06_TRIAL
+  // Hapus folder di lokasi eksternal
   const specificSessionPath = path.join(SESSION_DIR, `session-${uniqueId}`);
-
   setTimeout(() => {
     try {
       if (fs.existsSync(specificSessionPath)) {
         fs.rmSync(specificSessionPath, { recursive: true, force: true });
-        console.log(`[WA DELETE] Folder ${specificSessionPath} dihapus.`);
+        console.log(`[WA DELETE] Folder dihapus: ${specificSessionPath}`);
       }
     } catch (error) {
       console.error(`[WA DELETE ERROR]`, error.message);
