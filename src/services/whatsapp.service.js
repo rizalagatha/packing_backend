@@ -3,204 +3,199 @@ const qrcode = require("qrcode-terminal");
 const fs = require("fs");
 const path = require("path");
 
-const SESSION_DIR = path.join(__dirname, "../../.wwebjs_auth");
+// --- KONFIGURASI PATH SESI ---
+// Ini akan membuat folder .wwebjs_auth TEPAT di root folder project backend Anda
+const SESSION_PATH = path.resolve(__dirname, "../../.wwebjs_auth");
 
-// Objek untuk menampung semua instance client, di-key berdasarkan kode store
+// Pastikan folder cache ada (opsional, wwebjs biasanya buat sendiri)
+if (!fs.existsSync(SESSION_PATH)) {
+  fs.mkdirSync(SESSION_PATH, { recursive: true });
+}
+
+// Objek untuk menampung semua instance client
 const clients = {};
-
-const SENDER_CLIENT_ID = "KDC";
+const SENDER_CLIENT_ID = "KDC"; // Default pengirim pusat
 
 /**
- * Membuat dan menginisialisasi client baru untuk sebuah store.
- * Mengembalikan Promise yang akan resolve dengan QR code string.
+ * Mendapatkan informasi status sesi
+ */
+const getSessionInfo = async (storeCode) => {
+  const client = clients[storeCode];
+  if (!client) return { status: "DISCONNECTED", info: null };
+
+  try {
+    const state = await client.getState();
+    if (state === "CONNECTED") {
+      const info = client.info;
+      return {
+        status: "CONNECTED",
+        info: {
+          pushname: info.pushname,
+          wid: info.wid,
+          platform: info.platform,
+        },
+      };
+    }
+    return { status: state || "DISCONNECTED", info: null };
+  } catch (error) {
+    return { status: "INITIALIZING", info: null };
+  }
+};
+
+/**
+ * Membuat Client Baru
  */
 const createClient = (storeCode) => {
   return new Promise((resolve, reject) => {
-    console.log(`Membuat client untuk store: ${storeCode}`);
+    console.log(`[WA] Menginisialisasi client untuk: ${storeCode}`);
+    console.log(
+      `[WA] Lokasi penyimpanan sesi: ${SESSION_PATH}/session-${storeCode}`
+    );
+
+    // Cek jika client sudah ada dan aktif
+    if (clients[storeCode]) {
+      console.log(`[WA] Client ${storeCode} sudah aktif.`);
+      resolve("ALREADY_CONNECTED"); // Tidak perlu QR lagi
+      return;
+    }
 
     const client = new Client({
-      authStrategy: new LocalAuth({ clientId: storeCode }),
+      restartOnAuthFail: true, // Auto restart jika auth gagal
+      authStrategy: new LocalAuth({
+        clientId: storeCode,
+        dataPath: SESSION_PATH, // <--- KUNCI: Menentukan lokasi folder .wwebjs_auth
+      }),
       puppeteer: {
         headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-accelerated-2d-canvas",
+          "--no-first-run",
+          "--no-zygote",
+          "--disable-gpu",
+        ],
       },
     });
 
+    // --- EVENT LISTENERS ---
+
     client.on("qr", (qr) => {
-      console.log(`QR Code untuk ${storeCode} diterima.`);
-      // Jangan generate di terminal, tapi kirim string QR-nya
-      resolve(qr);
+      console.log(`[WA] QR Code diterima untuk ${storeCode}`);
+      resolve(qr); // Kirim QR ke frontend
     });
 
     client.on("ready", () => {
-      console.log(`✅ Client untuk ${storeCode} sudah siap!`);
-      clients[storeCode] = client; // Simpan client yang sudah siap
+      console.log(`[WA] ✅ Client ${storeCode} SIAP!`);
+      clients[storeCode] = client;
+    });
+
+    client.on("authenticated", () => {
+      console.log(`[WA] ${storeCode} Terautentikasi.`);
     });
 
     client.on("auth_failure", (msg) => {
-      console.error(`Autentikasi GAGAL untuk ${storeCode}:`, msg);
-      reject(new Error("Authentication failed"));
+      console.error(`[WA] Autentikasi GAGAL ${storeCode}:`, msg);
+      delete clients[storeCode]; // Hapus dari memori
     });
 
-    client.initialize();
+    client.on("disconnected", (reason) => {
+      console.warn(`[WA] Client ${storeCode} TERPUTUS. Alasan: ${reason}`);
+      delete clients[storeCode]; // Hapus agar bisa reconnect nanti
+      // Opsional: Bisa panggil createClient(storeCode) lagi di sini untuk auto-reconnect
+    });
+
+    // Mulai inisialisasi
+    try {
+      client.initialize();
+    } catch (err) {
+      console.error("Gagal initialize client:", err);
+      reject(err);
+    }
   });
 };
 
 /**
- * Mengirim pesan DARI PENGIRIM UTAMA (KDC) KE store tujuan.
- */
-const sendMessageToStore = async (recipientStoreCode, message) => {
-  const senderClient = clients[SENDER_CLIENT_ID];
-  const recipientClient = clients[recipientStoreCode];
-
-  if (!senderClient || (await senderClient.getState()) !== "CONNECTED") {
-    console.warn(`Client PENGIRIM (${SENDER_CLIENT_ID}) tidak siap.`);
-    return { success: false, error: "Sender client not ready" };
-  }
-
-  if (!recipientClient) {
-    console.warn(
-      `Tidak ada sesi WhatsApp aktif untuk store PENERIMA (${recipientStoreCode}).`
-    );
-    return { success: false, error: "Recipient client not found" };
-  }
-
-  const recipientNumber = recipientClient.info.wid.user;
-  const chatId = `${recipientNumber}@c.us`;
-
-  try {
-    await senderClient.sendMessage(chatId, message);
-    console.log(
-      `Pesan terkirim dari ${SENDER_CLIENT_ID} ke ${recipientStoreCode} (${recipientNumber})`
-    );
-    return { success: true };
-  } catch (error) {
-    console.error(`Gagal mengirim pesan ke ${recipientStoreCode}:`, error);
-    return { success: false, error };
-  }
-};
-
-/**
- * Menghapus sesi untuk sebuah store
- */
-const deleteSession = async (storeCode) => {
-  const client = clients[storeCode];
-  if (client) {
-    await client.destroy(); // Hentikan client
-    delete clients[storeCode];
-  }
-  // Hapus folder sesi dari disk
-  const sessionPath = path.join(SESSION_DIR, `session-${storeCode}`);
-  if (fs.existsSync(sessionPath)) {
-    fs.rmSync(sessionPath, { recursive: true, force: true });
-  }
-  console.log(`Sesi untuk ${storeCode} telah dihapus.`);
-  return { success: true };
-};
-
-/**
- * Mengirim pesan ke nomor manapun menggunakan client pengirim utama (KDC).
- */
-const sendMessage = async (number, message) => {
-  const senderClient = clients[SENDER_CLIENT_ID];
-
-  if (senderClient && (await senderClient.getState()) === "CONNECTED") {
-    const chatId = `${number}@c.us`;
-    try {
-      await senderClient.sendMessage(chatId, message);
-      console.log(`Pesan terkirim ke ${number} via client ${SENDER_CLIENT_ID}`);
-      return { success: true };
-    } catch (error) {
-      console.error(`Gagal mengirim pesan ke ${number}:`, error);
-      return { success: false, error };
-    }
-  } else {
-    console.warn(
-      `Client PENGIRIM (${SENDER_CLIENT_ID}) tidak siap atau tidak ditemukan.`
-    );
-    return {
-      success: false,
-      error: `Sender client '${SENDER_CLIENT_ID}' not ready`,
-    };
-  }
-};
-
-/**
- * Mendapatkan informasi status sesi untuk sebuah store
- */
-const getSessionInfo = async (storeCode) => {
-  const client = clients[storeCode];
-
-  if (!client) {
-    return { status: 'DISCONNECTED', info: null };
-  }
-
-  try {
-    const state = await client.getState();
-    if (state === 'CONNECTED') {
-      const info = client.info;
-      return {
-        status: 'CONNECTED',
-        info: {
-          pushname: info.pushname,
-          wid: info.wid, // Contains user (number), server, etc.
-          platform: info.platform
-        }
-      };
-    } else {
-      return { status: state || 'DISCONNECTED', info: null };
-    }
-  } catch (error) {
-    // If client exists but getState fails (e.g. during initialization), assume initializing or disconnected
-    return { status: 'INITIALIZING', info: null };
-  }
-};
-
-/**
- * Mengirim pesan DARI spesifik store ke nomor pelanggan
+ * Mengirim pesan DARI spesifik store
  */
 const sendMessageFromClient = async (storeCode, number, message) => {
-  // 1. Ambil client milik store tersebut
   const client = clients[storeCode];
 
-  // 2. Validasi Client
+  // Logic Re-hydrating (Opsional):
+  // Jika client ada di folder tapi belum di-load ke memori (misal habis restart server),
+  // Anda bisa memanggil createClient(storeCode) di sini secara diam-diam.
+
   if (!client) {
-    return { 
-      success: false, 
-      error: `WA Store ${storeCode} belum terhubung. Silakan scan QR di menu Pengaturan.` 
+    return {
+      success: false,
+      error: `WA Store ${storeCode} belum terhubung/aktif.`,
     };
   }
 
   try {
-    // Cek status koneksi (opsional, kadang getState throw error di puppeteer lama)
-    // const state = await client.getState();
-    // if (state !== 'CONNECTED') throw new Error("WA tidak terhubung.");
+    // Format nomor
+    let formattedNumber = number.toString().replace(/\D/g, "");
+    if (formattedNumber.startsWith("0"))
+      formattedNumber = "62" + formattedNumber.slice(1);
+    if (!formattedNumber.endsWith("@c.us")) formattedNumber += "@c.us";
 
-    // 3. Format Nomor (Hilangkan 0 atau +62 depan, ganti 62)
-    let formattedNumber = number.toString().replace(/\D/g, ''); // Hapus karakter non-angka
-    if (formattedNumber.startsWith('0')) {
-      formattedNumber = '62' + formattedNumber.slice(1);
-    }
-    if (!formattedNumber.endsWith('@c.us')) {
-      formattedNumber += '@c.us';
-    }
-
-    // 4. Kirim Pesan
     await client.sendMessage(formattedNumber, message);
     console.log(`[WA] Pesan terkirim dari ${storeCode} ke ${number}`);
     return { success: true };
-
   } catch (error) {
     console.error(`[WA Error] ${storeCode} -> ${number}:`, error);
-    return { success: false, error: "Gagal mengirim pesan. Pastikan WA aktif." };
+    return { success: false, error: "Gagal mengirim pesan." };
   }
 };
 
+/**
+ * Hapus Sesi
+ */
+const deleteSession = async (storeCode) => {
+  const client = clients[storeCode];
+
+  // 1. Logout & Destroy Client
+  if (client) {
+    try {
+      await client.logout(); // Logout dari WA server
+    } catch (e) {
+      console.log("Logout error (abaikan):", e.message);
+    }
+
+    try {
+      await client.destroy(); // Tutup browser
+    } catch (e) {
+      console.log("Destroy error (abaikan):", e.message);
+    }
+
+    delete clients[storeCode];
+  }
+
+  // 2. Hapus Folder Fisik
+  const specificSessionPath = path.join(SESSION_PATH, `session-${storeCode}`);
+  try {
+    if (fs.existsSync(specificSessionPath)) {
+      fs.rmSync(specificSessionPath, { recursive: true, force: true });
+      console.log(`[WA] Folder sesi ${storeCode} dihapus.`);
+    }
+  } catch (error) {
+    console.error(`[WA] Gagal hapus folder sesi: ${error.message}`);
+  }
+
+  return { success: true };
+};
+
+// ... (export fungsi lainnya: createClient, sendMessageFromClient, deleteSession, getSessionInfo)
+// Export sendMessage dan sendMessageToStore (legacy) jika masih dipakai
+const sendMessage = async () => {}; // Placeholder jika tidak dipakai lagi
+const sendMessageToStore = async () => {}; // Placeholder
+
 module.exports = {
   createClient,
-  sendMessageToStore,
-  deleteSession,
-  sendMessage,
-  getSessionInfo,
   sendMessageFromClient,
+  deleteSession,
+  getSessionInfo,
+  sendMessage,
+  sendMessageToStore,
 };

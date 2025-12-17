@@ -374,6 +374,10 @@ const getPrintData = async (req, res) => {
                 g.gdg_akun,
                 g.gdg_transferbank
 
+                -- Info Customer (TAMBAHAN INI)
+                c.cus_nama,
+                c.cus_telp
+
             FROM tinv_hdr h
             LEFT JOIN tgudang g ON g.gdg_kode = h.inv_cab
             WHERE h.inv_nomor = ?
