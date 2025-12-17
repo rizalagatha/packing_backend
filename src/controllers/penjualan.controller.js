@@ -433,27 +433,19 @@ const getPrintData = async (req, res) => {
   }
 };
 
-// 6. Send Receipt WA (UPDATE BAGIAN INI SAJA)
+// 6. Send Receipt WA (UPDATE LENGKAP)
 const sendReceiptWa = async (req, res) => {
   try {
-    const { nomor, hp } = req.body; // hp didapat dari input manual frontend
+    const { nomor, hp } = req.body;
     const { cabang } = req.user;
 
-    // 1. Validasi Input HP
-    if (!hp) {
-        return res.status(400).json({ success: false, message: "Nomor HP wajib diisi." });
-    }
+    // 1. Validasi & Format HP
+    if (!hp) return res.status(400).json({ success: false, message: "Nomor HP wajib diisi." });
 
-    // 2. Format HP di Controller (Pembersihan awal)
-    // Hapus spasi, strip, plus, dll.
     let cleanHp = hp.toString().replace(/[^0-9]/g, '');
-    
-    // Ubah 08.. jadi 628..
-    if (cleanHp.startsWith('0')) {
-        cleanHp = '62' + cleanHp.slice(1);
-    }
+    if (cleanHp.startsWith('0')) cleanHp = '62' + cleanHp.slice(1);
 
-    // 3. Ambil Data Transaksi (Sama seperti sebelumnya)
+    // 2. Ambil Header Transaksi
     const [rows] = await pool.query(
       `SELECT h.*, g.gdg_inv_nama 
        FROM tinv_hdr h 
@@ -464,48 +456,77 @@ const sendReceiptWa = async (req, res) => {
     if (!rows.length) return res.status(404).json({ message: "Invoice not found" });
     const hdr = rows[0];
 
+    // 3. Ambil Detail (DENGAN NAMA BARANG LENGKAP)
+    // Perhatikan bagian TRIM(CONCAT(...)) di bawah ini
     const [dtl] = await pool.query(
-      `SELECT d.*, b.brg_jeniskaos 
+      `SELECT d.*, 
+       TRIM(CONCAT(b.brg_jeniskaos, " ", b.brg_tipe, " ", b.brg_lengan, " ", b.brg_jeniskain, " ", b.brg_warna)) AS nama_lengkap
        FROM tinv_dtl d 
        LEFT JOIN tbarangdc b ON b.brg_kode = d.invd_kode 
        WHERE invd_inv_nomor = ?`,
       [nomor]
     );
 
-    // 4. Susun Pesan (Sama seperti sebelumnya)
-    let message = `*STRUK BELANJA - ${hdr.gdg_inv_nama}*\n`;
-    message += `No: ${hdr.inv_nomor}\n`;
+    // Helper Formatting
+    const padRight = (str, len) => (str + ' '.repeat(len)).slice(0, len);
+    const padLeft = (str, len) => (' '.repeat(len) + str).slice(-len);
+    const formatRupiah = (num) => parseInt(num).toLocaleString('id-ID');
+
+    // 4. Susun Pesan (Format Monospace)
+    let message = "```"; 
+    message += `STRUK BELANJA - ${hdr.gdg_inv_nama}\n`;
+    message += `No : ${hdr.inv_nomor}\n`;
     message += `Tgl: ${format(new Date(hdr.inv_tanggal), "dd-MM-yyyy")}\n`;
-    message += `--------------------------------\n`;
+    message += `------------------------------\n`;
 
     let subTotal = 0;
     dtl.forEach((d) => {
-      const total = d.invd_jumlah * (d.invd_harga - d.invd_diskon);
+      const hargaSatuan = d.invd_harga - d.invd_diskon;
+      const total = d.invd_jumlah * hargaSatuan;
       subTotal += total;
-      message += `${d.brg_jeniskaos} (${d.invd_ukuran})\n`;
-      if (d.invd_diskon > 0) {
-        message += `${d.invd_jumlah} x ${parseInt(d.invd_harga).toLocaleString('id-ID')} (Disc ${parseInt(d.invd_diskon).toLocaleString('id-ID')}) = ${total.toLocaleString('id-ID')}\n`;
-      } else {
-        message += `${d.invd_jumlah} x ${parseInt(d.invd_harga).toLocaleString('id-ID')} = ${total.toLocaleString('id-ID')}\n`;
-      }
+
+      // BARIS 1: Nama Barang Lengkap
+      // Gunakan alias 'nama_lengkap' yang kita buat di query tadi
+      const namaBarang = d.nama_lengkap || 'Barang Tanpa Nama';
+      message += `${namaBarang} (${d.invd_ukuran})\n`;
+
+      // BARIS 2: Hitungan Harga
+      const qtyHarga = `${d.invd_jumlah} x ${formatRupiah(hargaSatuan)}`;
+      const totalStr = formatRupiah(total);
+
+      // Hitung spasi agar rata kanan
+      const spaceNeeded = 30 - qtyHarga.length - totalStr.length;
+      const spaces = spaceNeeded > 0 ? ' '.repeat(spaceNeeded) : ' ';
+
+      message += `${qtyHarga}${spaces}${totalStr}\n`;
     });
     
-    const grandTotal = subTotal - (hdr.inv_disc || 0); // Handle null disc
+    const grandTotal = subTotal - (hdr.inv_disc || 0);
 
-    message += `--------------------------------\n`;
-    message += `Total: Rp ${subTotal.toLocaleString('id-ID')}\n`;
-    if (hdr.inv_disc > 0) message += `Diskon: -Rp ${parseInt(hdr.inv_disc).toLocaleString('id-ID')}\n`;
-    message += `*Grand Total: Rp ${grandTotal.toLocaleString('id-ID')}*\n`;
-    message += `\nTerima kasih!`;
+    message += `------------------------------\n`;
+    
+    // FOOTER
+    message += `Total      : ${padLeft(formatRupiah(subTotal), 17)}\n`;
+    if (hdr.inv_disc > 0) {
+        message += `Diskon     : ${padLeft('-'+formatRupiah(hdr.inv_disc), 17)}\n`;
+    }
+    message += `Grand Total: ${padLeft(formatRupiah(grandTotal), 17)}\n`;
+    
+    if (hdr.inv_bayar > 0) {
+        message += `Bayar      : ${padLeft(formatRupiah(hdr.inv_bayar), 17)}\n`;
+        message += `Kembali    : ${padLeft(formatRupiah(hdr.inv_kembali), 17)}\n`;
+    }
+
+    message += `\n`;
+    message += `      Terima Kasih!      \n`;
+    message += "```"; 
 
     // 5. Kirim via Baileys Service
-    // Kirim 'cleanHp' yang sudah diformat
     const result = await whatsappService.sendMessageFromClient(cabang, cleanHp, message);
 
     if (result.success) {
         res.status(200).json({ success: true, message: "Struk terkirim ke WhatsApp." });
     } else {
-        // Tangkap error detail dari service
         res.status(400).json({ success: false, message: result.error });
     }
 
