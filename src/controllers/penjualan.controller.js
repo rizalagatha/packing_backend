@@ -559,25 +559,38 @@ const sendReceiptWa = async (req, res) => {
 
 // 7. Send Receipt WA (VERSI GAMBAR)
 const sendReceiptWaImage = async (req, res) => {
-  // Bungkus dengan multer middleware
+  // Log saat request masuk
+  console.log("[UPLOAD] Menerima request upload gambar...");
+
   upload(req, res, async function (err) {
     if (err) {
+      console.error("[UPLOAD ERROR] Multer Error:", err);
       return res
         .status(400)
-        .json({ success: false, message: "Gagal upload gambar." });
+        .json({ success: false, message: "Gagal upload gambar (Multer)." });
     }
 
     try {
-      const { hp, caption } = req.body; // Data teks
-      const file = req.file; // Data gambar
+      // LOG DATA YANG DITERIMA
+      console.log("[UPLOAD] Body:", req.body); // Cek apakah 'hp' dan 'caption' masuk
+      console.log("[UPLOAD] File:", req.file ? "Ada File" : "TIDAK ADA FILE");
+
+      const { hp, caption } = req.body;
+      const file = req.file;
       const { cabang } = req.user;
 
+      // VALIDASI DETIL
       if (!file) {
+        console.error("[UPLOAD FAIL] File kosong");
         return res
           .status(400)
-          .json({ success: false, message: "File gambar tidak ditemukan." });
+          .json({
+            success: false,
+            message: "File gambar tidak terbaca di server.",
+          });
       }
       if (!hp) {
+        console.error("[UPLOAD FAIL] Nomor HP kosong");
         return res
           .status(400)
           .json({ success: false, message: "Nomor HP wajib diisi." });
@@ -587,8 +600,9 @@ const sendReceiptWaImage = async (req, res) => {
       let cleanHp = hp.toString().replace(/[^0-9]/g, "");
       if (cleanHp.startsWith("0")) cleanHp = "62" + cleanHp.slice(1);
 
+      console.log(`[UPLOAD] Mengirim ke Service WA (${cleanHp})...`);
+
       // Kirim ke Service Baileys
-      // file.buffer adalah data mentah gambarnya
       const result = await whatsappService.sendImageFromClient(
         cabang,
         cleanHp,
@@ -597,15 +611,19 @@ const sendReceiptWaImage = async (req, res) => {
       );
 
       if (result.success) {
+        console.log("[UPLOAD] Sukses terkirim!");
         res
           .status(200)
           .json({ success: true, message: "Struk Gambar Terkirim!" });
       } else {
+        console.error("[UPLOAD] Gagal di Baileys:", result.error);
         res.status(400).json({ success: false, message: result.error });
       }
     } catch (error) {
-      console.error("Error sendReceiptWaImage:", error);
-      res.status(500).json({ success: false, message: "Server Error." });
+      console.error("[UPLOAD SERVER ERROR]", error); // <--- INI AKAN MENJELASKAN ERROR 500
+      res
+        .status(500)
+        .json({ success: false, message: "Server Error: " + error.message });
     }
   });
 };
