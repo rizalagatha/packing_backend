@@ -30,4 +30,12 @@ router.get("/piutang-per-cabang", dashboardController.getPiutangPerCabang);
 // 8. Detail Invoice Piutang Per Cabang
 router.get("/piutang-detail/:cabang", dashboardController.getBranchPiutangDetail);
 
+router.get("/top-selling", dashboardController.getTopSellingProducts);
+
+router.get(
+  "/stock-spread/:barcode",
+  protect,
+  dashboardController.getProductStockSpread
+);
+
 module.exports = router;

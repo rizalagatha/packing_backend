@@ -1,8 +1,8 @@
 const pool = require("../config/database");
 const moment = require("moment");
+const { format, startOfMonth, endOfMonth } = require("date-fns");
 
 // --- 1. Statistik Hari Ini ---
-// --- 1. Statistik Hari Ini (Fixed NaN Issue) ---
 const getTodayStats = async (req, res) => {
   try {
     const user = req.user;
@@ -358,6 +358,118 @@ const getBranchPiutangDetail = async (req, res) => {
   }
 };
 
+// --- 9. Top Selling Products (Referensi Anda) ---
+const getTopSellingProducts = async (req, res) => {
+  const { cabang: userCabang } = req.user; // Ambil cabang dari token user
+  const { branchFilter } = req.query; // Ambil filter dari frontend (?branchFilter=K01)
+
+  try {
+    // 1. Tentukan Range Tanggal (Awal Bulan - Akhir Bulan ini)
+    const startDate = format(startOfMonth(new Date()), "yyyy-MM-dd");
+    const endDate = format(endOfMonth(new Date()), "yyyy-MM-dd");
+
+    let targetCabang = null;
+
+    // 2. LOGIKA PENENTUAN CABANG (Sesuai Referensi)
+    if (userCabang === "KDC") {
+      // Jika KDC, cek apakah ada filter dari frontend?
+      if (branchFilter && branchFilter !== "ALL") {
+        targetCabang = branchFilter;
+      }
+      // Jika filter kosong atau 'ALL', targetCabang tetap null (ambil semua)
+    } else {
+      // Jika bukan KDC, paksa pakai cabang user sendiri
+      targetCabang = userCabang;
+    }
+
+    // 3. QUERY UTAMA (Sesuai Referensi)
+    let query = `
+        SELECT 
+            d.invd_kode AS KODE,
+            TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS NAMA,
+            d.invd_ukuran AS UKURAN, 
+            SUM(d.invd_jumlah) AS TOTAL
+        FROM tinv_hdr h
+        INNER JOIN tinv_dtl d ON d.invd_inv_nomor = h.inv_nomor
+        INNER JOIN tbarangdc a ON a.brg_kode = d.invd_kode
+        WHERE h.inv_sts_pro = 0 
+          AND h.inv_tanggal BETWEEN ? AND ?
+          AND a.brg_logstok = "Y"
+    `;
+
+    const params = [startDate, endDate];
+
+    // 4. TERAPKAN FILTER CABANG JIKA ADA
+    if (targetCabang) {
+      query += ` AND h.inv_cab = ? `;
+      params.push(targetCabang);
+    }
+
+    // 5. GROUPING & SORTING
+    query += `
+        GROUP BY d.invd_kode, NAMA, d.invd_ukuran
+        ORDER BY TOTAL DESC
+        LIMIT 10;
+    `;
+
+    const [rows] = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      data: rows,
+    });
+  } catch (error) {
+    console.error("Error getTopSellingProducts:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// --- 10. Cek Stok Detail (FIXED: Menggunakan tmasterstok) ---
+const getProductStockSpread = async (req, res) => {
+  const { barcode } = req.params;
+  const { ukuran } = req.query; // Kita terima parameter ukuran (opsional) agar akurat
+
+  try {
+    // Query Perhitungan Stok Real-time dari tmasterstok
+    // Rumus: SUM(Masuk - Keluar)
+    let query = `
+       SELECT 
+         m.mst_cab AS cabang,
+         IFNULL(g.gdg_nama, m.mst_cab) AS nama_cabang, -- Ambil nama gudang, jika null pakai kode
+         SUM(m.mst_stok_in - m.mst_stok_out) AS qty
+       FROM tmasterstok m
+       LEFT JOIN tgudang g ON g.gdg_kode = m.mst_cab
+       WHERE m.mst_brg_kode = ? 
+         AND m.mst_aktif = 'Y'
+    `;
+
+    const params = [barcode];
+
+    // Jika ada filter ukuran (dikirim dari frontend), tambahkan ke kondisi
+    // Ini penting agar stok yang muncul sesuai dengan ukuran yang diklik di chart
+    if (ukuran) {
+      query += ` AND m.mst_ukuran = ? `;
+      params.push(ukuran);
+    }
+
+    query += `
+       GROUP BY m.mst_cab
+       HAVING qty > 0 -- Hanya tampilkan cabang yang stoknya ada (positif)
+       ORDER BY qty DESC
+    `;
+
+    const [rows] = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      data: rows,
+    });
+  } catch (error) {
+    console.error("Error getProductStockSpread:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   getTodayStats,
   getTotalPiutang,
@@ -367,4 +479,6 @@ module.exports = {
   getPendingActions,
   getPiutangPerCabang,
   getBranchPiutangDetail,
+  getTopSellingProducts,
+  getProductStockSpread,
 };
