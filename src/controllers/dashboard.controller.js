@@ -327,7 +327,7 @@ const getPiutangPerCabang = async (req, res) => {
   }
 };
 
-// --- 8. Detail Invoice Piutang per Cabang (UPDATED) ---
+// --- 8. Detail Invoice Piutang per Cabang (FIXED) ---
 const getBranchPiutangDetail = async (req, res) => {
   const { cabang } = req.params;
   try {
@@ -336,15 +336,17 @@ const getBranchPiutangDetail = async (req, res) => {
             u.ph_inv_nomor AS invoice,
             DATE_FORMAT(h.inv_tanggal, '%Y-%m-%d') AS tanggal,
             IFNULL(v.debet - v.kredit, 0) AS sisa_piutang,
-            -- LOGIC AMBIL NAMA: Cek Master -> Cek Manual -> Default
-            COALESCE(c.cus_nama, h.inv_nama, 'Customer Umum') AS nama_customer
+            
+            -- FIX: Hanya ambil dari tcustomer. Jika null (tidak ketemu), set 'Customer Umum'
+            IFNULL(c.cus_nama, 'Customer Umum') AS nama_customer
+
         FROM tpiutang_hdr u
         LEFT JOIN (
             SELECT pd_ph_nomor, SUM(pd_debet) AS debet, SUM(pd_kredit) AS kredit 
             FROM tpiutang_dtl GROUP BY pd_ph_nomor
         ) v ON v.pd_ph_nomor = u.ph_nomor
         LEFT JOIN tinv_hdr h ON h.inv_nomor = u.ph_inv_nomor
-        LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode -- JOIN KE CUSTOMER
+        LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode -- JOIN yang benar
         WHERE u.ph_cab = ? AND (v.debet - v.kredit) > 0
         ORDER BY sisa_piutang DESC;
     `;
