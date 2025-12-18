@@ -190,19 +190,19 @@ const savePending = async (req, res) => {
       await connection.query("INSERT INTO tpendingsj SET ?", pendingData);
       await connection.commit();
 
-      // Kirim notifikasi WhatsApp hanya saat membuat pending baru
-      const itemsWithSelisih = items.filter(
-        (item) => item.jumlahKirim - item.jumlahTerima > 0
-      );
-      if (itemsWithSelisih.length > 0) {
-        let waMessage = `*Notifikasi Penerimaan Pending*\n\nNomor Pending: *${newPendingNomor}*\nNo. SJ: *${header.nomorSj}*\nStore: *${user.cabang}*\n\nTerdapat selisih barang yang perlu diproses:\n`;
-        itemsWithSelisih.forEach((item) => {
-          waMessage += `- ${item.nama} (${item.ukuran}): Selisih *${
-            item.jumlahKirim - item.jumlahTerima
-          }* pcs\n`;
-        });
-        await whatsappService.sendMessageToStore(user.cabang, waMessage);
-      }
+      // // Kirim notifikasi WhatsApp hanya saat membuat pending baru
+      // const itemsWithSelisih = items.filter(
+      //   (item) => item.jumlahKirim - item.jumlahTerima > 0
+      // );
+      // if (itemsWithSelisih.length > 0) {
+      //   let waMessage = `*Notifikasi Penerimaan Pending*\n\nNomor Pending: *${newPendingNomor}*\nNo. SJ: *${header.nomorSj}*\nStore: *${user.cabang}*\n\nTerdapat selisih barang yang perlu diproses:\n`;
+      //   itemsWithSelisih.forEach((item) => {
+      //     waMessage += `- ${item.nama} (${item.ukuran}): Selisih *${
+      //       item.jumlahKirim - item.jumlahTerima
+      //     }* pcs\n`;
+      //   });
+      //   await whatsappService.sendMessageToStore(user.cabang, waMessage);
+      // }
 
       res.status(201).json({
         success: true,
