@@ -37,4 +37,6 @@ router.get("/top-selling", dashboardController.getTopSellingProducts);
 
 router.get("/stock-spread/:barcode", dashboardController.getProductStockSpread);
 
+router.get("/trends", dashboardController.getProductTrends);
+
 module.exports = router;

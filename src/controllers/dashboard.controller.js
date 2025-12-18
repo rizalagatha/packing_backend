@@ -470,6 +470,70 @@ const getProductStockSpread = async (req, res) => {
   }
 };
 
+// --- 11. Analisa Tren Produk (Kain & Lengan) ---
+const getProductTrends = async (req, res) => {
+  const { cabang: userCabang } = req.user;
+  const { branchFilter } = req.query;
+
+  try {
+    const startDate = format(startOfMonth(new Date()), "yyyy-MM-dd");
+    const endDate = format(endOfMonth(new Date()), "yyyy-MM-dd");
+
+    let targetCabang = null;
+    if (userCabang === "KDC") {
+      if (branchFilter && branchFilter !== "ALL") targetCabang = branchFilter;
+    } else {
+      targetCabang = userCabang;
+    }
+
+    // Helper untuk menyusun query agar tidak duplikasi kodingan
+    const buildQuery = (groupByColumn) => {
+      let sql = `
+        SELECT 
+            IFNULL(${groupByColumn}, 'LAINNYA') AS kategori,
+            SUM(d.invd_jumlah) AS total_qty
+        FROM tinv_hdr h
+        JOIN tinv_dtl d ON d.invd_inv_nomor = h.inv_nomor
+        JOIN tbarangdc a ON a.brg_kode = d.invd_kode
+        WHERE h.inv_sts_pro = 0 
+          AND h.inv_tanggal BETWEEN ? AND ?
+          AND a.brg_logstok = "Y"
+      `;
+      
+      const params = [startDate, endDate];
+
+      if (targetCabang) {
+        sql += ` AND h.inv_cab = ? `;
+        params.push(targetCabang);
+      }
+
+      sql += ` GROUP BY ${groupByColumn} ORDER BY total_qty DESC `;
+      
+      return { sql, params };
+    };
+
+    // 1. Query Kain
+    const qKain = buildQuery('a.brg_jeniskain');
+    const [resKain] = await pool.query(qKain.sql, qKain.params);
+
+    // 2. Query Lengan
+    const qLengan = buildQuery('a.brg_lengan');
+    const [resLengan] = await pool.query(qLengan.sql, qLengan.params);
+
+    res.json({
+      success: true,
+      data: {
+        kain: resKain,
+        lengan: resLengan
+      }
+    });
+
+  } catch (error) {
+    console.error("Error getProductTrends:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   getTodayStats,
   getTotalPiutang,
@@ -481,4 +545,5 @@ module.exports = {
   getBranchPiutangDetail,
   getTopSellingProducts,
   getProductStockSpread,
+  getProductTrends,
 };
