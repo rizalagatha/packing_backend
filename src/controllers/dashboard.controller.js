@@ -7,7 +7,7 @@ const getTodayStats = async (req, res) => {
   try {
     const user = req.user;
     const today = moment().format("YYYY-MM-DD");
-    
+
     let branchFilter = "";
     const params = [today];
 
@@ -27,7 +27,7 @@ const getTodayStats = async (req, res) => {
           AND h.inv_sts_pro = 0 
           ${branchFilter}
     `;
-    
+
     const qDetail = `
         SELECT 
             SUM(d.invd_jumlah) as qty, 
@@ -46,13 +46,13 @@ const getTodayStats = async (req, res) => {
     // --- FIX LOGIC: Casting ke Number secara eksplisit ---
     // MySQL driver kadang mengembalikan Decimal sebagai String, jadi kita paksa ke Number dulu
     const gross = Number(detailRows[0]?.gross) || 0;
-    const disc  = Number(headerRows[0]?.disc) || 0;
-    const ppn   = Number(headerRows[0]?.ppn) || 0;
-    
+    const disc = Number(headerRows[0]?.disc) || 0;
+    const ppn = Number(headerRows[0]?.ppn) || 0;
+
     const stats = {
-        todayTransactions: Number(headerRows[0]?.trx) || 0,
-        todayQty: Number(detailRows[0]?.qty) || 0,
-        todaySales: gross - disc + ppn // Sekarang operasi matematika pasti aman
+      todayTransactions: Number(headerRows[0]?.trx) || 0,
+      todayQty: Number(detailRows[0]?.qty) || 0,
+      todaySales: gross - disc + ppn, // Sekarang operasi matematika pasti aman
     };
 
     res.json(stats);
@@ -327,7 +327,7 @@ const getPiutangPerCabang = async (req, res) => {
   }
 };
 
-// --- 8. Detail Invoice Piutang per Cabang ---
+// --- 8. Detail Invoice Piutang per Cabang (UPDATED) ---
 const getBranchPiutangDetail = async (req, res) => {
   const { cabang } = req.params;
   try {
@@ -335,13 +335,16 @@ const getBranchPiutangDetail = async (req, res) => {
         SELECT 
             u.ph_inv_nomor AS invoice,
             DATE_FORMAT(h.inv_tanggal, '%Y-%m-%d') AS tanggal,
-            IFNULL(v.debet - v.kredit, 0) AS sisa_piutang
+            IFNULL(v.debet - v.kredit, 0) AS sisa_piutang,
+            -- LOGIC AMBIL NAMA: Cek Master -> Cek Manual -> Default
+            COALESCE(c.cus_nama, h.inv_nama, 'Customer Umum') AS nama_customer
         FROM tpiutang_hdr u
         LEFT JOIN (
             SELECT pd_ph_nomor, SUM(pd_debet) AS debet, SUM(pd_kredit) AS kredit 
             FROM tpiutang_dtl GROUP BY pd_ph_nomor
         ) v ON v.pd_ph_nomor = u.ph_nomor
         LEFT JOIN tinv_hdr h ON h.inv_nomor = u.ph_inv_nomor
+        LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode -- JOIN KE CUSTOMER
         WHERE u.ph_cab = ? AND (v.debet - v.kredit) > 0
         ORDER BY sisa_piutang DESC;
     `;
