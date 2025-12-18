@@ -499,7 +499,7 @@ const getProductTrends = async (req, res) => {
           AND h.inv_tanggal BETWEEN ? AND ?
           AND a.brg_logstok = "Y"
       `;
-      
+
       const params = [startDate, endDate];
 
       if (targetCabang) {
@@ -507,8 +507,13 @@ const getProductTrends = async (req, res) => {
         params.push(targetCabang);
       }
 
-      sql += ` GROUP BY ${groupByColumn} ORDER BY total_qty DESC `;
-      
+      // UPDATE DISINI: Tambahkan LIMIT 5
+      sql += ` 
+        GROUP BY ${groupByColumn} 
+        ORDER BY total_qty DESC 
+        LIMIT 5 
+      `;
+
       return { sql, params };
     };
 
