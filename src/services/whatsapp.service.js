@@ -185,6 +185,48 @@ const sendMessageFromClient = async (storeCode, number, message) => {
 };
 
 /**
+ * Kirim Gambar (Image)
+ * fileBuffer: Data gambar dalam bentuk Buffer (dari Multer)
+ * caption: Teks keterangan (opsional)
+ */
+const sendImageFromClient = async (
+  storeCode,
+  number,
+  fileBuffer,
+  caption = ""
+) => {
+  const uniqueId = getUniqueId(storeCode);
+  let sock = clients[uniqueId];
+
+  if (!sock) return { success: false, error: "WA belum terhubung." };
+
+  try {
+    let id = number.toString().replace(/\D/g, "");
+    if (id.startsWith("0")) id = "62" + id.slice(1);
+    const jid = id + "@s.whatsapp.net";
+
+    console.log(`[BAILEYS] Mengirim GAMBAR ke ${jid}`);
+
+    // Cek nomor dulu
+    const [result] = await sock.onWhatsApp(jid);
+    if (!result?.exists) {
+      return { success: false, error: "Nomor tidak terdaftar di WA." };
+    }
+
+    // KIRIM GAMBAR
+    await sock.sendMessage(jid, {
+      image: fileBuffer,
+      caption: caption,
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error(`[BAILEYS IMG ERROR]`, error);
+    return { success: false, error: "Gagal kirim gambar." };
+  }
+};
+
+/**
  * Hapus Sesi
  */
 const deleteSession = async (storeCode) => {

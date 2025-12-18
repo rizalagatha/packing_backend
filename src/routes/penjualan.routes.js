@@ -12,5 +12,6 @@ router.post("/save", penjualanController.savePenjualan);
 
 router.get("/print/:nomor", penjualanController.getPrintData);
 router.post("/send-wa", penjualanController.sendReceiptWa);
+router.post("/send-wa-image", protect, penjualanController.sendReceiptWaImage);
 
 module.exports = router;

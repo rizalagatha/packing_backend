@@ -1,6 +1,13 @@
 const pool = require("../config/database");
 const { format } = require("date-fns");
 const whatsappService = require("../services/whatsapp.service"); // Pastikan import service
+const multer = require("multer");
+
+// Konfigurasi Multer (Simpan di RAM agar cepat, gak perlu simpan ke Harddisk)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // Max 5MB
+}).single("image"); // 'image' adalah nama key field dari frontend
 
 // --- Helper Functions ---
 const toSqlDate = (date) => format(new Date(date), "yyyy-MM-dd");
@@ -440,10 +447,13 @@ const sendReceiptWa = async (req, res) => {
     const { cabang } = req.user;
 
     // 1. Validasi & Format HP
-    if (!hp) return res.status(400).json({ success: false, message: "Nomor HP wajib diisi." });
+    if (!hp)
+      return res
+        .status(400)
+        .json({ success: false, message: "Nomor HP wajib diisi." });
 
-    let cleanHp = hp.toString().replace(/[^0-9]/g, '');
-    if (cleanHp.startsWith('0')) cleanHp = '62' + cleanHp.slice(1);
+    let cleanHp = hp.toString().replace(/[^0-9]/g, "");
+    if (cleanHp.startsWith("0")) cleanHp = "62" + cleanHp.slice(1);
 
     // 2. Ambil Header Transaksi
     const [rows] = await pool.query(
@@ -453,7 +463,8 @@ const sendReceiptWa = async (req, res) => {
        WHERE inv_nomor = ?`,
       [nomor]
     );
-    if (!rows.length) return res.status(404).json({ message: "Invoice not found" });
+    if (!rows.length)
+      return res.status(404).json({ message: "Invoice not found" });
     const hdr = rows[0];
 
     // 3. Ambil Detail (DENGAN NAMA BARANG LENGKAP)
@@ -468,12 +479,12 @@ const sendReceiptWa = async (req, res) => {
     );
 
     // Helper Formatting
-    const padRight = (str, len) => (str + ' '.repeat(len)).slice(0, len);
-    const padLeft = (str, len) => (' '.repeat(len) + str).slice(-len);
-    const formatRupiah = (num) => parseInt(num).toLocaleString('id-ID');
+    const padRight = (str, len) => (str + " ".repeat(len)).slice(0, len);
+    const padLeft = (str, len) => (" ".repeat(len) + str).slice(-len);
+    const formatRupiah = (num) => parseInt(num).toLocaleString("id-ID");
 
     // 4. Susun Pesan (Format Monospace)
-    let message = "```"; 
+    let message = "```";
     message += `STRUK BELANJA - ${hdr.gdg_inv_nama}\n`;
     message += `No : ${hdr.inv_nomor}\n`;
     message += `Tgl: ${format(new Date(hdr.inv_tanggal), "dd-MM-yyyy")}\n`;
@@ -487,7 +498,7 @@ const sendReceiptWa = async (req, res) => {
 
       // BARIS 1: Nama Barang Lengkap
       // Gunakan alias 'nama_lengkap' yang kita buat di query tadi
-      const namaBarang = d.nama_lengkap || 'Barang Tanpa Nama';
+      const namaBarang = d.nama_lengkap || "Barang Tanpa Nama";
       message += `${namaBarang} (${d.invd_ukuran})\n`;
 
       // BARIS 2: Hitungan Harga
@@ -496,44 +507,107 @@ const sendReceiptWa = async (req, res) => {
 
       // Hitung spasi agar rata kanan
       const spaceNeeded = 30 - qtyHarga.length - totalStr.length;
-      const spaces = spaceNeeded > 0 ? ' '.repeat(spaceNeeded) : ' ';
+      const spaces = spaceNeeded > 0 ? " ".repeat(spaceNeeded) : " ";
 
       message += `${qtyHarga}${spaces}${totalStr}\n`;
     });
-    
+
     const grandTotal = subTotal - (hdr.inv_disc || 0);
 
     message += `------------------------------\n`;
-    
+
     // FOOTER
     message += `Total      : ${padLeft(formatRupiah(subTotal), 17)}\n`;
     if (hdr.inv_disc > 0) {
-        message += `Diskon     : ${padLeft('-'+formatRupiah(hdr.inv_disc), 17)}\n`;
+      message += `Diskon     : ${padLeft(
+        "-" + formatRupiah(hdr.inv_disc),
+        17
+      )}\n`;
     }
     message += `Grand Total: ${padLeft(formatRupiah(grandTotal), 17)}\n`;
-    
+
     if (hdr.inv_bayar > 0) {
-        message += `Bayar      : ${padLeft(formatRupiah(hdr.inv_bayar), 17)}\n`;
-        message += `Kembali    : ${padLeft(formatRupiah(hdr.inv_kembali), 17)}\n`;
+      message += `Bayar      : ${padLeft(formatRupiah(hdr.inv_bayar), 17)}\n`;
+      message += `Kembali    : ${padLeft(formatRupiah(hdr.inv_kembali), 17)}\n`;
     }
 
     message += `\n`;
     message += `      Terima Kasih!      \n`;
-    message += "```"; 
+    message += "```";
 
     // 5. Kirim via Baileys Service
-    const result = await whatsappService.sendMessageFromClient(cabang, cleanHp, message);
+    const result = await whatsappService.sendMessageFromClient(
+      cabang,
+      cleanHp,
+      message
+    );
 
     if (result.success) {
-        res.status(200).json({ success: true, message: "Struk terkirim ke WhatsApp." });
+      res
+        .status(200)
+        .json({ success: true, message: "Struk terkirim ke WhatsApp." });
     } else {
-        res.status(400).json({ success: false, message: result.error });
+      res.status(400).json({ success: false, message: result.error });
     }
-
   } catch (error) {
     console.error("Error sendReceiptWa:", error);
-    res.status(500).json({ success: false, message: "Terjadi kesalahan server." });
+    res
+      .status(500)
+      .json({ success: false, message: "Terjadi kesalahan server." });
   }
+};
+
+// 7. Send Receipt WA (VERSI GAMBAR)
+const sendReceiptWaImage = async (req, res) => {
+  // Bungkus dengan multer middleware
+  upload(req, res, async function (err) {
+    if (err) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Gagal upload gambar." });
+    }
+
+    try {
+      const { hp, caption } = req.body; // Data teks
+      const file = req.file; // Data gambar
+      const { cabang } = req.user;
+
+      if (!file) {
+        return res
+          .status(400)
+          .json({ success: false, message: "File gambar tidak ditemukan." });
+      }
+      if (!hp) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Nomor HP wajib diisi." });
+      }
+
+      // Format HP
+      let cleanHp = hp.toString().replace(/[^0-9]/g, "");
+      if (cleanHp.startsWith("0")) cleanHp = "62" + cleanHp.slice(1);
+
+      // Kirim ke Service Baileys
+      // file.buffer adalah data mentah gambarnya
+      const result = await whatsappService.sendImageFromClient(
+        cabang,
+        cleanHp,
+        file.buffer,
+        caption || "Struk Belanja"
+      );
+
+      if (result.success) {
+        res
+          .status(200)
+          .json({ success: true, message: "Struk Gambar Terkirim!" });
+      } else {
+        res.status(400).json({ success: false, message: result.error });
+      }
+    } catch (error) {
+      console.error("Error sendReceiptWaImage:", error);
+      res.status(500).json({ success: false, message: "Server Error." });
+    }
+  });
 };
 
 module.exports = {
@@ -544,4 +618,5 @@ module.exports = {
   getActivePromos,
   getPrintData, // -> Baru
   sendReceiptWa, // -> Baru
+  sendReceiptWaImage,
 };
