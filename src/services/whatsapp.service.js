@@ -260,6 +260,7 @@ const deleteSession = async (storeCode) => {
 module.exports = {
   createClient,
   sendMessageFromClient,
+  sendImageFromClient,
   deleteSession,
   getSessionInfo,
 };
