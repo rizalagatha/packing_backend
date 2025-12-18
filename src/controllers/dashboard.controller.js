@@ -539,72 +539,59 @@ const getProductTrends = async (req, res) => {
   }
 };
 
-// --- 12. Laporan Stok Kosong Reguler ---
+// --- 12. Laporan Stok Kosong Reguler (FIXED 500 ERROR) ---
 const getEmptyStockReguler = async (req, res) => {
   const { cabang: userCabang } = req.user;
   const { search = "", targetCabang = "" } = req.query;
 
   try {
-    // 1. Tentukan Cabang Mana yang Dicek
-    // Default: Cabang user sendiri
     let branchToCheck = userCabang;
-
-    // Jika user KDC (Pusat) dan dia memilih cabang tertentu, pakai itu
     if (userCabang === "KDC" && targetCabang && targetCabang !== "ALL") {
       branchToCheck = targetCabang;
-    } 
-    // Jika KDC tapi tidak pilih (atau pilih ALL), default ke K01 (Pusat) atau biarkan KDC (biasanya KDC stoknya beda)
-    // Disini kita asumsikan jika KDC pilih ALL, kita cek KDC saja, atau bisa diatur logic lain.
-    // Sesuai referensi: branchToCheck dipakai di query.
+    }
 
     const searchPattern = `%${search}%`;
 
+    // FIX: Gunakan Nested Query (Derived Table) agar 'stok_akhir' terbaca aman
     const query = `
-        SELECT 
-            b.brgd_kode AS kode,
-            b.brgd_barcode AS barcode,
-            TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) AS nama_barang,
-            b.brgd_ukuran AS ukuran,
-            a.brg_ktgp AS kategori,
-            
-            -- Subquery: Hitung Stok Real-time Cabang Terpilih
-            IFNULL((
-                SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
-                FROM tmasterstok m 
-                WHERE m.mst_aktif = 'Y' 
-                  AND m.mst_cab = ?  -- Parameter 1
-                  AND m.mst_brg_kode = b.brgd_kode 
-                  AND m.mst_ukuran = b.brgd_ukuran
-            ), 0) AS stok_akhir
+        SELECT * FROM (
+            SELECT 
+                b.brgd_kode AS kode,
+                b.brgd_barcode AS barcode,
+                TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) AS nama_barang,
+                b.brgd_ukuran AS ukuran,
+                a.brg_ktgp AS kategori,
+                
+                IFNULL((
+                    SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
+                    FROM tmasterstok m 
+                    WHERE m.mst_aktif = 'Y' 
+                      AND m.mst_cab = ?  -- Param 1
+                      AND m.mst_brg_kode = b.brgd_kode 
+                      AND m.mst_ukuran = b.brgd_ukuran
+                ), 0) AS stok_akhir
 
-        FROM tbarangdc_dtl b
-        INNER JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
-        WHERE a.brg_aktif = 0 -- Barang Aktif (di DB Anda 0 = Aktif ya?)
-          AND a.brg_ktgp = 'REGULER'
-          
-          -- Filter Pencarian
-          AND (
-              b.brgd_kode LIKE ? 
-              OR b.brgd_barcode LIKE ? 
-              OR TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) LIKE ?
-          )
-
-        -- Filter: Hanya yang stoknya habis/minus
-        HAVING stok_akhir <= 0
-
-        ORDER BY nama_barang, b.brgd_ukuran
+            FROM tbarangdc_dtl b
+            INNER JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
+            WHERE a.brg_aktif = 0 
+              AND a.brg_ktgp = 'REGULER'
+              AND (
+                  b.brgd_kode LIKE ?      -- Param 2
+                  OR b.brgd_barcode LIKE ? -- Param 3
+                  OR TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) LIKE ? -- Param 4
+              )
+        ) AS summary
+        WHERE stok_akhir <= 0
+        ORDER BY nama_barang, ukuran
         LIMIT 100;
     `;
 
-    // Urutan Parameter: Cabang -> Search -> Search -> Search
     const params = [branchToCheck, searchPattern, searchPattern, searchPattern];
-
     const [rows] = await pool.query(query, params);
 
     res.json({
       success: true,
       data: rows,
-      checkedBranch: branchToCheck // Info balik ke frontend cabang mana yang dicek
     });
 
   } catch (error) {
