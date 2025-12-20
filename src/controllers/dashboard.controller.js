@@ -540,6 +540,7 @@ const getProductTrends = async (req, res) => {
 };
 
 // --- 12. Laporan Stok Kosong Reguler ---
+// --- 12. Laporan Stok Kosong Reguler ---
 const getEmptyStockReguler = async (req, res) => {
   const { cabang: userCabang } = req.user;
   const { search = "", targetCabang = "" } = req.query;
@@ -552,6 +553,7 @@ const getEmptyStockReguler = async (req, res) => {
 
     const searchPattern = `%${search}%`;
 
+    // VERSI FIX: Menghapus komentar SQL (--) agar aman dari Syntax Error
     const query = `
         SELECT 
             b.brgd_kode AS kode,
@@ -562,40 +564,28 @@ const getEmptyStockReguler = async (req, res) => {
             COALESCE(stok.sisa, 0) AS stok_akhir
         FROM tbarangdc_dtl b
         INNER JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
-        -- Optimization: Join langsung ke masterstok tanpa subquery grouping di awal
-        -- Kita filter dulu di WHERE clause agar joinnya ringan
         LEFT JOIN (
             SELECT mst_brg_kode, mst_ukuran, (mst_stok_in - mst_stok_out) as sisa
             FROM tmasterstok
             WHERE mst_cab = ? AND mst_aktif = 'Y'
         ) stok ON stok.mst_brg_kode = b.brgd_kode AND stok.mst_ukuran = b.brgd_ukuran
-
         WHERE 
-          -- PENTING: Cek apakah status aktif di database kamu 'Y', '1', atau 'True'?
-          -- Biasanya kita mau cari barang yg AKTIF tapi kosong. 
-          -- Kalau 0 = Tidak Aktif, ganti jadi 1 atau 'Y'.
           a.brg_aktif = 'Y' 
-          
           AND a.brg_ktgp = 'REGULER'
           AND (
               b.brgd_kode LIKE ? 
               OR b.brgd_barcode LIKE ?
               OR TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) LIKE ?
           )
-          -- Filter stok kosong/minus
           AND COALESCE(stok.sisa, 0) <= 0 
-        
         ORDER BY nama_barang, ukuran
-        LIMIT 50; -- Turunkan limit ke 50 biar lebih cepat loadnya
+        LIMIT 50
     `;
 
-    // Pastikan urutan parameter: [cabang, search, search, search]
+    // Urutan parameter: [cabang, search, search, search]
     const params = [branchToCheck, searchPattern, searchPattern, searchPattern];
     
-    // Debugging: Cek berapa lama query berjalan
-    console.time("QueryStokKosong");
     const [rows] = await pool.query(query, params);
-    console.timeEnd("QueryStokKosong");
 
     res.json({ success: true, data: rows });
 
