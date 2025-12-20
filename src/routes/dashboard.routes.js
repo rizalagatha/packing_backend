@@ -41,9 +41,6 @@ router.get("/trends", dashboardController.getProductTrends);
 
 router.get("/stock-empty-reguler", dashboardController.getEmptyStockReguler);
 
-router.get(
-  "/dashboard/sales-spread",
-  dashboardController.getProductSalesSpread
-);
+router.get("/sales-spread", dashboardController.getProductSalesSpread);
 
 module.exports = router;
