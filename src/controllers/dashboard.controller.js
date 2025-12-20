@@ -552,41 +552,83 @@ const getEmptyStockReguler = async (req, res) => {
 
     const searchPattern = `%${search}%`;
 
-    // FIX: Gunakan Nested Query (Derived Table) agar 'stok_akhir' terbaca aman
+    // OPTIMIZED QUERY: Using JOIN instead of Correlated Subquery
     const query = `
-        SELECT * FROM (
-            SELECT 
-                b.brgd_kode AS kode,
-                b.brgd_barcode AS barcode,
-                TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) AS nama_barang,
-                b.brgd_ukuran AS ukuran,
-                a.brg_ktgp AS kategori,
-                
-                IFNULL((
-                    SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
-                    FROM tmasterstok m 
-                    WHERE m.mst_aktif = 'Y' 
-                      AND m.mst_cab = ?  -- Param 1
-                      AND m.mst_brg_kode = b.brgd_kode 
-                      AND m.mst_ukuran = b.brgd_ukuran
-                ), 0) AS stok_akhir
-
-            FROM tbarangdc_dtl b
-            INNER JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
-            WHERE a.brg_aktif = 0 
-              AND a.brg_ktgp = 'REGULER'
-              AND (
-                  b.brgd_kode LIKE ?      -- Param 2
-                  OR b.brgd_barcode LIKE ? -- Param 3
-                  OR TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) LIKE ? -- Param 4
-              )
-        ) AS summary
-        WHERE stok_akhir <= 0
+        SELECT 
+            b.brgd_kode AS kode,
+            b.brgd_barcode AS barcode,
+            TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) AS nama_barang,
+            b.brgd_ukuran AS ukuran,
+            a.brg_ktgp AS kategori,
+            COALESCE(stok.total_stok, 0) AS stok_akhir
+        FROM tbarangdc_dtl b
+        INNER JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
+        -- JOIN with aggregated stock for the specific branch
+        LEFT JOIN (
+            SELECT mst_brg_kode, mst_ukuran, SUM(mst_stok_in - mst_stok_out) as total_stok
+            FROM tmasterstok
+            WHERE mst_aktif = 'Y' AND mst_cab = ? 
+            GROUP BY mst_brg_kode, mst_ukuran
+        ) stok ON stok.mst_brg_kode = b.brgd_kode AND stok.mst_ukuran = b.brgd_ukuran
+        WHERE a.brg_aktif = 0 
+          AND a.brg_ktgp = 'REGULER'
+          AND (
+              b.brgd_kode LIKE ? 
+              OR b.brgd_barcode LIKE ?
+              OR TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)) LIKE ?
+          )
+          AND COALESCE(stok.total_stok, 0) <= 0 -- Filter empty stock directly
         ORDER BY nama_barang, ukuran
         LIMIT 100;
     `;
 
     const params = [branchToCheck, searchPattern, searchPattern, searchPattern];
+    const [rows] = await pool.query(query, params);
+
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error getEmptyStockReguler:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// --- 13. Sebaran Penjualan Produk (Sales Spread) ---
+const getProductSalesSpread = async (req, res) => {
+  const { kode } = req.params; // or req.query depending on route
+  const { ukuran } = req.query;
+  const user = req.user;
+
+  try {
+    // 1. Determine Date Range (Current Month)
+    const startDate = format(startOfMonth(new Date()), "yyyy-MM-dd");
+    const endDate = format(endOfMonth(new Date()), "yyyy-MM-dd");
+
+    // 2. Query Sales Distribution
+    let query = `
+        SELECT 
+            h.inv_cab AS cabang,
+            IFNULL(g.gdg_nama, h.inv_cab) AS nama_cabang,
+            SUM(d.invd_jumlah) AS qty
+        FROM tinv_dtl d
+        JOIN tinv_hdr h ON h.inv_nomor = d.invd_inv_nomor
+        LEFT JOIN tgudang g ON g.gdg_kode = h.inv_cab
+        WHERE d.invd_kode = ?
+          AND h.inv_sts_pro = 0
+          AND h.inv_tanggal BETWEEN ? AND ?
+    `;
+
+    const params = [kode, startDate, endDate];
+
+    if (ukuran) {
+        query += ` AND d.invd_ukuran = ? `;
+        params.push(ukuran);
+    }
+
+    query += `
+        GROUP BY h.inv_cab, g.gdg_nama
+        ORDER BY qty DESC
+    `;
+
     const [rows] = await pool.query(query, params);
 
     res.json({
@@ -595,7 +637,7 @@ const getEmptyStockReguler = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error getEmptyStockReguler:", error);
+    console.error("Error getProductSalesSpread:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -613,4 +655,5 @@ module.exports = {
   getProductStockSpread,
   getProductTrends,
   getEmptyStockReguler,
+  getProductSalesSpread,
 };
