@@ -83,6 +83,9 @@ app.use("/api/dashboard", dashboardRoutes);
 const packingListRoutes = require("./src/routes/packingList.routes"); // <--- Import
 app.use("/api/packing-list-form", packingListRoutes); // <--- Daftarkan
 
+const authorizationRoutes = require('./src/routes/authorization.routes.js');
+app.use("/api/authorization", authorizationRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
