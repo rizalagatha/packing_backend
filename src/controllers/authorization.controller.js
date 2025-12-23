@@ -1,6 +1,6 @@
 const pool = require("../config/database");
 
-// [MANAGER] Mengambil daftar request yang pending (status = 0)
+// [MANAGER] Mengambil daftar request yang pending (status = 'P')
 const getPendingRequests = async (req, res) => {
   try {
     const user = req.user; 
@@ -12,13 +12,13 @@ const getPendingRequests = async (req, res) => {
     if (user.cabang === "KDC") {
       query = `
         SELECT * FROM totorisasi 
-        WHERE o_status = 0 
+        WHERE o_status = 'P' 
         ORDER BY o_created DESC
       `;
     } else {
       query = `
         SELECT * FROM totorisasi 
-        WHERE o_status = 0 AND o_cab = ? 
+        WHERE o_status = 'P' AND o_cab = ? 
         ORDER BY o_created DESC
       `;
       params.push(user.cabang);
@@ -54,13 +54,18 @@ const processRequest = async (req, res) => {
   }
 
   try {
-    // Tentukan status baru: 1 = Approved, 2 = Rejected
-    const newStatus = action === "APPROVE" ? 1 : 2;
+    // Tentukan status baru: 
+    // 'Y' = Approved (Yes)
+    // 'N' = Rejected (No)
+    const newStatus = action === "APPROVE" ? 'Y' : 'N';
 
+    // [FIX] Update status dan approver.
+    // Hapus update o_pin untuk menghindari error data too long.
+    // Pastikan hanya mengupdate data yang statusnya masih 'P' (Pending)
     const query = `
         UPDATE totorisasi 
         SET o_status = ?, o_approver = ?, o_approved_at = NOW()
-        WHERE o_nomor = ? AND o_status = 0
+        WHERE o_nomor = ? AND o_status = 'P'
     `;
 
     const [result] = await pool.query(query, [newStatus, user.nama, authNomor]);
