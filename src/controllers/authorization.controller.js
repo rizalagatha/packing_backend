@@ -3,11 +3,12 @@ const pool = require("../config/database");
 // [MANAGER] Mengambil daftar request yang pending (status = 0)
 const getPendingRequests = async (req, res) => {
   try {
-    const user = req.user; // Didapat dari middleware authenticateToken
+    const user = req.user; 
     let query = "";
     let params = [];
 
-    // Logika: Jika user KDC (Pusat), lihat semua. Jika cabang, lihat cabang sendiri.
+    // Logika: Jika user KDC (Pusat), lihat semua. 
+    // Jika cabang, hanya lihat cabang sendiri.
     if (user.cabang === "KDC") {
       query = `
         SELECT * FROM totorisasi 
@@ -25,10 +26,12 @@ const getPendingRequests = async (req, res) => {
 
     const [rows] = await pool.query(query, params);
 
+    // [PENTING] Kembalikan array kosong [] jika tidak ada data, jangan null/error
     res.status(200).json({
       success: true,
-      data: rows,
+      data: rows || [], 
     });
+
   } catch (error) {
     console.error("Error getPendingRequests:", error);
     res.status(500).json({
