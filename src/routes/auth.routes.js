@@ -1,17 +1,22 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const authController = require('../controllers/auth.controller');
+const authController = require("../controllers/auth.controller");
 const { authenticateToken } = require("../middlewares/auth.middleware");
 
-router.use(authenticateToken);
+// [FIX] JANGAN pasang authenticateToken secara global di sini!
+// router.use(authenticateToken); <--- INI PENYEBABNYA
+
+// --- RUTE PUBLIK (Tidak butuh token) ---
 
 // Rute untuk login pengguna
-// Method: POST, URL: /api/auth/login
-router.post('/login', authController.login);
+router.post("/login", authController.login);
 
-// (Anda bisa menambahkan rute otentikasi lain di sini, misal: register, logout, dll)
-router.post('/select-branch', authController.selectBranch);
+// Rute pilih cabang (ini pakai preAuthToken di body, jadi tidak butuh header Bearer standar)
+router.post("/select-branch", authController.selectBranch);
 
-router.put("/fcm-token", authController.updateFcmToken);
+// --- RUTE PRIVAT (Butuh Token) ---
+
+// [FIX] Pasang middleware hanya di rute yang butuh login
+router.put("/fcm-token", authenticateToken, authController.updateFcmToken);
 
 module.exports = router;
