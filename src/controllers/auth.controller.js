@@ -166,7 +166,30 @@ const selectBranch = async (req, res) => {
   }
 };
 
+const updateFcmToken = async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+    const userId = req.user.id; // Asumsi pakai middleware auth yang mengisi req.user
+
+    if (!fcmToken) {
+      return res.status(400).json({ message: "Token FCM wajib diisi" });
+    }
+
+    // Simpan token ke database user yang sedang login
+    await pool.query(`UPDATE tuser SET user_fcm_token = ? WHERE user_id = ?`, [
+      fcmToken,
+      userId,
+    ]);
+
+    res.json({ message: "FCM Token berhasil diupdate" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Gagal update token" });
+  }
+};
+
 module.exports = {
   login,
   selectBranch,
+  updateFcmToken,
 };
