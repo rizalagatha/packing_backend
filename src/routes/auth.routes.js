@@ -12,6 +12,6 @@ router.post('/login', authController.login);
 // (Anda bisa menambahkan rute otentikasi lain di sini, misal: register, logout, dll)
 router.post('/select-branch', authController.selectBranch);
 
-router.put("/fcm-token", verifyToken, authController.updateFcmToken);
+router.put("/fcm-token", authController.updateFcmToken);
 
 module.exports = router;
