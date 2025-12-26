@@ -2,21 +2,45 @@ const pool = require("../config/database");
 const moment = require("moment");
 const { format, startOfMonth, endOfMonth } = require("date-fns");
 
+// Helper untuk filter cabang dinamis
+// Jika user KDC dan kirim filterCabang, gunakan filter tersebut.
+// Jika user BUKAN KDC, paksa gunakan cabang user sendiri.
+const getBranchFilter = (
+  user,
+  queryFilter,
+  tableAlias = "h",
+  column = "inv_cab"
+) => {
+  let filter = "";
+  let params = [];
+
+  if (user.cabang !== "KDC") {
+    // User Cabang: Hanya bisa lihat cabangnya sendiri
+    filter = ` AND ${tableAlias}.${column} = ? `;
+    params.push(user.cabang);
+  } else if (queryFilter && queryFilter !== "ALL") {
+    // User KDC + Ada Filter: Lihat cabang spesifik
+    filter = ` AND ${tableAlias}.${column} = ? `;
+    params.push(queryFilter);
+  }
+  // User KDC + No Filter: Lihat Semua (Tidak ada WHERE tambahan)
+
+  return { filter, params };
+};
+
 // --- 1. Statistik Hari Ini ---
 const getTodayStats = async (req, res) => {
   try {
     const user = req.user;
+    const { cabang } = req.query; // Ambil parameter filter cabang
     const today = moment().format("YYYY-MM-DD");
 
-    let branchFilter = "";
-    const params = [today];
+    // Gunakan helper untuk konsistensi
+    const f = getBranchFilter(user, cabang, "h", "inv_cab");
 
-    if (user.cabang !== "KDC") {
-      branchFilter = " AND h.inv_cab = ? ";
-      params.push(user.cabang);
-    }
+    // Params dasar [today] + params dari filter cabang
+    const params = [today, ...f.params];
 
-    // Gunakan 2 Query Terpisah (Header & Detail) agar lebih ringan & akurat
     const qHeader = `
         SELECT 
             COUNT(*) as trx, 
@@ -25,7 +49,7 @@ const getTodayStats = async (req, res) => {
         FROM tinv_hdr h 
         WHERE h.inv_tanggal = ? 
           AND h.inv_sts_pro = 0 
-          ${branchFilter}
+          ${f.filter} 
     `;
 
     const qDetail = `
@@ -37,14 +61,12 @@ const getTodayStats = async (req, res) => {
         WHERE h.inv_tanggal = ? 
           AND h.inv_sts_pro = 0 
           AND d.invd_kode NOT LIKE 'JASA%' 
-          ${branchFilter}
+          ${f.filter}
     `;
 
     const [headerRows] = await pool.query(qHeader, params);
     const [detailRows] = await pool.query(qDetail, params);
 
-    // --- FIX LOGIC: Casting ke Number secara eksplisit ---
-    // MySQL driver kadang mengembalikan Decimal sebagai String, jadi kita paksa ke Number dulu
     const gross = Number(detailRows[0]?.gross) || 0;
     const disc = Number(headerRows[0]?.disc) || 0;
     const ppn = Number(headerRows[0]?.ppn) || 0;
@@ -52,7 +74,7 @@ const getTodayStats = async (req, res) => {
     const stats = {
       todayTransactions: Number(headerRows[0]?.trx) || 0,
       todayQty: Number(detailRows[0]?.qty) || 0,
-      todaySales: gross - disc + ppn, // Sekarang operasi matematika pasti aman
+      todaySales: gross - disc + ppn,
     };
 
     res.json(stats);
@@ -66,21 +88,27 @@ const getTodayStats = async (req, res) => {
 const getTotalPiutang = async (req, res) => {
   try {
     const user = req.user;
-    let branchFilter = "";
-    const params = [];
+    const { cabang } = req.query;
+
+    // Filter piutang biasanya pakai LEFT(ph_inv_nomor, 3) atau ph_cab jika ada kolomnya
+    // Asumsi ph_inv_nomor formatnya "K01-..."
+    let f = { filter: "", params: [] };
 
     if (user.cabang !== "KDC") {
-      branchFilter = " AND LEFT(ph.ph_inv_nomor, 3) = ? ";
-      params.push(user.cabang);
+      f.filter = " AND LEFT(ph.ph_inv_nomor, 3) = ? ";
+      f.params.push(user.cabang);
+    } else if (cabang && cabang !== "ALL") {
+      f.filter = " AND LEFT(ph.ph_inv_nomor, 3) = ? ";
+      f.params.push(cabang);
     }
 
     const query = `
       SELECT SUM( GREATEST(0, (SELECT SUM(pd_debet) FROM tpiutang_dtl WHERE pd_ph_nomor = ph.ph_nomor) - (SELECT SUM(pd_kredit) FROM tpiutang_dtl WHERE pd_ph_nomor = ph.ph_nomor)) ) AS totalSisaPiutang
       FROM tpiutang_hdr ph
-      WHERE 1=1 ${branchFilter}
+      WHERE 1=1 ${f.filter}
     `;
-    // Query di atas dioptimalkan agar tidak melakukan JOIN berat jika tabel piutang besar
-    const [rows] = await pool.query(query, params);
+
+    const [rows] = await pool.query(query, f.params);
     res.json({ totalSisaPiutang: rows[0].totalSisaPiutang || 0 });
   } catch (error) {
     console.error("Error getTotalPiutang:", error);
@@ -91,50 +119,60 @@ const getTotalPiutang = async (req, res) => {
 // --- 3. SALES TARGET SUMMARY (OPTIMALISASI UTAMA) ---
 const getSalesTargetSummary = async (req, res) => {
   const user = req.user;
+  const { cabang } = req.query;
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
-  // Kita pecah jadi 2 query sederhana (Query Sales & Query Target)
-  // lalu gabungkan di JS. Ini JAUH lebih cepat daripada Subquery SQL yang kompleks.
+  // Filter Sales (tinv_hdr)
+  const fSales = getBranchFilter(user, cabang, "h", "inv_cab");
 
-  // A. Query Sales (Gross - Diskon)
+  // Filter Target (ttarget_kaosan)
+  // Perhatikan: kolom cabang di target mungkin beda nama (misal: kode_gudang)
+  let fTarget = { filter: "", params: [] };
+  if (user.cabang !== "KDC") {
+    fTarget.filter = " AND t.kode_gudang = ? ";
+    fTarget.params.push(user.cabang);
+  } else if (cabang && cabang !== "ALL") {
+    fTarget.filter = " AND t.kode_gudang = ? ";
+    fTarget.params.push(cabang);
+  }
+
   let salesQuery = `
         SELECT 
-            -- Total Gross dari Detail
             (SELECT COALESCE(SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)), 0)
              FROM tinv_hdr h
              JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
              WHERE h.inv_sts_pro = 0 
                AND YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ?
-               ${user.cabang !== "KDC" ? "AND h.inv_cab = ?" : ""}
+               ${fSales.filter}
             ) 
             - 
-            -- Total Diskon dari Header
             (SELECT COALESCE(SUM(h.inv_disc), 0)
              FROM tinv_hdr h
              WHERE h.inv_sts_pro = 0 
                AND YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ?
-               ${user.cabang !== "KDC" ? "AND h.inv_cab = ?" : ""}
+               ${fSales.filter}
             ) as nominal
     `;
 
-  // Params untuk Sales (Ada 2 subquery, jadi params diduplikasi)
-  let salesParams = [tahun, bulan];
-  if (user.cabang !== "KDC") salesParams.push(user.cabang);
-  salesParams = [...salesParams, ...salesParams]; // Duplicate params for second subquery
+  let salesParams = [
+    tahun,
+    bulan,
+    ...fSales.params,
+    tahun,
+    bulan,
+    ...fSales.params,
+  ];
 
-  // B. Query Target
   let targetQuery = `
         SELECT SUM(t.target_omset) as target
         FROM kpi.ttarget_kaosan t 
         WHERE t.tahun = ? AND t.bulan = ? 
-        ${user.cabang !== "KDC" ? "AND t.kode_gudang = ?" : ""}
+        ${fTarget.filter}
     `;
-  let targetParams = [tahun, bulan];
-  if (user.cabang !== "KDC") targetParams.push(user.cabang);
+  let targetParams = [tahun, bulan, ...fTarget.params];
 
   try {
-    // Jalankan Parallel agar cepat
     const [salesResult, targetResult] = await Promise.all([
       pool.query(salesQuery, salesParams),
       pool.query(targetQuery, targetParams),
