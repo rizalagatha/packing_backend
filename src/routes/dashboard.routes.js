@@ -43,4 +43,6 @@ router.get("/stock-empty-reguler", dashboardController.getEmptyStockReguler);
 
 router.get("/sales-spread", dashboardController.getProductSalesSpread);
 
+router.get("/laporan-stok-minus", dashboardController.getNegativeStockReport);
+
 module.exports = router;
