@@ -258,12 +258,13 @@ const getBranchPerformance = async (req, res) => {
 // --- 5. Chart Data ---
 const getSalesChart = async (req, res) => {
   try {
-    const { startDate, endDate, groupBy, cabang } = req.query;
+    const { startDate, endDate, groupBy, cabang } = req.query; // Ensure 'cabang' is read
     const user = req.user;
 
     let branchCondition = "";
     const params = [startDate, endDate];
 
+    // LOGIC FIX: Prioritize User Branch, then Filter
     if (user.cabang !== "KDC") {
       branchCondition = " AND h.inv_cab = ? ";
       params.push(user.cabang);
@@ -276,27 +277,51 @@ const getSalesChart = async (req, res) => {
     if (groupBy === "month")
       dateSelect = "DATE_FORMAT(h.inv_tanggal, '%Y-%m-01')";
 
+    // LOG FOR DEBUGGING BACKEND (Optional, check your terminal)
+    // console.log("Chart Filter:", cabang, "Condition:", branchCondition);
+
     const query = `
       SELECT 
         ${dateSelect} as tanggal,
-        -- Hitung Gross Item dikurangi Header Diskon (diproporasi atau grouping)
-        -- Cara cepat: Sum(Gross) - Sum(Diskon Header) per hari
         (
-            (SELECT SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) 
-             FROM tinv_dtl d WHERE d.invd_inv_nomor IN (SELECT inv_nomor FROM tinv_hdr WHERE DATE(inv_tanggal) = DATE(h.inv_tanggal)))
+            (SELECT COALESCE(SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)), 0) 
+             FROM tinv_dtl d WHERE d.invd_inv_nomor IN (
+                SELECT inv_nomor FROM tinv_hdr h2 
+                WHERE DATE(h2.inv_tanggal) = DATE(h.inv_tanggal) 
+                ${branchCondition.replace(
+                  "h.",
+                  "h2."
+                )} -- FIX: Use alias h2 for subquery if needed, or rely on main WHERE
+             ))
              -
              SUM(h.inv_disc)
         ) as total
       FROM tinv_hdr h
       WHERE h.inv_tanggal BETWEEN ? AND ?
         AND h.inv_sts_pro = 0
-        ${branchCondition}
+        ${branchCondition} -- Apply filter to main query
       GROUP BY ${dateSelect}
       ORDER BY tanggal ASC
     `;
-    // NOTE: Query Chart di atas masih sedikit berat, tapi karena dilimit tanggal (startDate-endDate), harusnya aman.
 
-    const [rows] = await pool.query(query, params);
+    // NOTE: The subquery above is complex and might ignore the branch condition
+    // if not careful. Let's SIMPLIFY the query to ensure safety.
+
+    // BETTER SIMPLE QUERY (Recommended):
+    const simpleQuery = `
+        SELECT 
+            ${dateSelect} as tanggal,
+            SUM( (d.invd_jumlah * (d.invd_harga - d.invd_diskon)) ) - SUM(DISTINCT h.inv_disc) as total
+        FROM tinv_hdr h
+        JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
+        WHERE h.inv_tanggal BETWEEN ? AND ?
+          AND h.inv_sts_pro = 0
+          ${branchCondition}
+        GROUP BY ${dateSelect}
+        ORDER BY tanggal ASC
+    `;
+
+    const [rows] = await pool.query(simpleQuery, params);
     res.json(rows);
   } catch (error) {
     console.error("Error getSalesChart:", error);
