@@ -196,17 +196,36 @@ const getBranchPerformance = async (req, res) => {
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
-  // Ganti View 'v_sales_harian' dengan Direct Query agar index 'inv_tanggal' terpakai
   const query = `
-        WITH MonthlySales AS (
+        WITH 
+        -- 1. Hitung Netto Per Invoice (Sama persis dengan Web)
+        -- Mengurangi Diskon Faktur & Biaya Marketplace per nota
+        InvoiceNetto AS (
             SELECT 
-                h.inv_cab as cabang, 
-                SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) - SUM(DISTINCT h.inv_disc) AS nominal 
+                h.inv_nomor,
+                LEFT(h.inv_nomor, 3) AS cabang,
+                (
+                    SUM((d.invd_harga - d.invd_diskon) * d.invd_jumlah) 
+                    - COALESCE(h.inv_disc, 0)
+                    - COALESCE(h.inv_mp_biaya_platform, 0)
+                ) AS nominal_netto
             FROM tinv_hdr h
             JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
-            WHERE YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ? AND h.inv_sts_pro = 0
-            GROUP BY h.inv_cab
+            WHERE YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ? 
+              AND h.inv_sts_pro = 0
+            GROUP BY h.inv_nomor
         ),
+
+        -- 2. Aggregasi Sales Bulanan
+        MonthlySales AS (
+            SELECT 
+                cabang, 
+                SUM(nominal_netto) AS nominal 
+            FROM InvoiceNetto
+            GROUP BY cabang
+        ),
+
+        -- 3. Aggregasi Target Bulanan
         MonthlyTargets AS (
             SELECT 
                 kode_gudang AS cabang, 
@@ -215,35 +234,47 @@ const getBranchPerformance = async (req, res) => {
             WHERE tahun = ? AND bulan = ?
             GROUP BY cabang
         ),
+
+        -- 4. Aggregasi Retur Bulanan
         MonthlyReturns AS (
             SELECT 
-                rh.rj_cab AS cabang,
+                LEFT(rh.rj_nomor, 3) AS cabang,
                 SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)) AS total_retur
             FROM trj_hdr rh
             JOIN trj_dtl rd ON rd.rjd_nomor = rh.rj_nomor
             WHERE YEAR(rh.rj_tanggal) = ? AND MONTH(rh.rj_tanggal) = ?
-            GROUP BY rh.rj_cab
+            GROUP BY LEFT(rh.rj_nomor, 3)
         )
+
+        -- 5. Final Select (Join & Calc Achievement)
         SELECT 
             g.gdg_kode AS kode_cabang,
             g.gdg_nama AS nama_cabang,
+            
+            -- Netto Akhir = SalesNetto - Retur
             (COALESCE(ms.nominal, 0) - COALESCE(mr.total_retur, 0)) AS nominal,
+            
             COALESCE(mt.target, 0) AS target,
+            
             CASE 
                 WHEN COALESCE(mt.target, 0) > 0 THEN 
                     ((COALESCE(ms.nominal, 0) - COALESCE(mr.total_retur, 0)) / mt.target) * 100 
                 ELSE 0 
             END AS ach
+
         FROM tgudang g
         LEFT JOIN MonthlySales ms ON g.gdg_kode = ms.cabang
         LEFT JOIN MonthlyTargets mt ON g.gdg_kode = mt.cabang
         LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
+        
         WHERE 
             (g.gdg_dc = 0 OR g.gdg_kode = 'KPR') 
             AND g.gdg_kode <> 'KDC'
+        
         ORDER BY ach DESC;
     `;
 
+  // Parameter diulang 3x (Sales, Target, Retur)
   const params = [tahun, bulan, tahun, bulan, tahun, bulan];
 
   try {
