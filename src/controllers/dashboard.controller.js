@@ -32,79 +32,52 @@ const getBranchFilter = (
 const getTodayStats = async (req, res) => {
   try {
     const user = req.user;
-    const { cabang } = req.query;
+    const { cabang } = req.query; // Ambil parameter filter cabang
     const today = moment().format("YYYY-MM-DD");
 
-    // 1. Filter Sales
-    const fSales = getBranchFilter(user, cabang, "h", "inv_cab");
+    // Gunakan helper untuk konsistensi
+    const f = getBranchFilter(user, cabang, "h", "inv_cab");
 
-    // 2. Filter Retur (Ganti alias 'h' jadi 'rh' untuk tabel retur)
-    let fRetur = { filter: "", params: [] };
-    if (user.cabang !== "KDC") {
-      fRetur.filter = " AND rh.rj_cab = ? ";
-      fRetur.params.push(user.cabang);
-    } else if (cabang && cabang !== "ALL") {
-      fRetur.filter = " AND rh.rj_cab = ? ";
-      fRetur.params.push(cabang);
-    }
+    // Params dasar [today] + params dari filter cabang
+    const params = [today, ...f.params];
 
-    const query = `
-        WITH 
-        -- A. SALES HARI INI (Netto per Invoice)
-        DailySales AS (
-            SELECT 
-                h.inv_nomor,
-                SUM(d.invd_jumlah) AS qty,
-                (
-                    SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) 
-                    - COALESCE(h.inv_disc, 0)
-                    - COALESCE(h.inv_mp_biaya_platform, 0)
-                    + COALESCE(h.inv_ppn, 0) -- PPN tetap ikut sebagai omset harian (Cash In)
-                ) AS nominal_netto
-            FROM tinv_hdr h
-            JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
-            WHERE h.inv_tanggal = ? 
-              AND h.inv_sts_pro = 0
-              ${fSales.filter}
-            GROUP BY h.inv_nomor
-        ),
-
-        -- B. RETUR HARI INI (Pengurang)
-        DailyRetur AS (
-            SELECT 
-                SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)) AS total_retur
-            FROM trj_hdr rh
-            JOIN trj_dtl rd ON rd.rjd_nomor = rh.rj_nomor
-            WHERE rh.rj_tanggal = ?
-              ${fRetur.filter}
-        )
-
-        -- C. FINAL SUMMARY
+    const qHeader = `
         SELECT 
-            (SELECT COUNT(*) FROM DailySales) AS trx,
-            (SELECT COALESCE(SUM(qty), 0) FROM DailySales) AS qty,
-            (
-                (SELECT COALESCE(SUM(nominal_netto), 0) FROM DailySales) 
-                - 
-                (SELECT COALESCE(SUM(total_retur), 0) FROM DailyRetur)
-            ) AS sales
+            COUNT(*) as trx, 
+            SUM(inv_disc) as disc, 
+            SUM(inv_ppn) as ppn 
+        FROM tinv_hdr h 
+        WHERE h.inv_tanggal = ? 
+          AND h.inv_sts_pro = 0 
+          ${f.filter} 
     `;
 
-    const params = [
-      today,
-      ...fSales.params, // Params untuk Sales
-      today,
-      ...fRetur.params, // Params untuk Retur
-    ];
+    const qDetail = `
+        SELECT 
+            SUM(d.invd_jumlah) as qty, 
+            SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) as gross
+        FROM tinv_hdr h 
+        JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
+        WHERE h.inv_tanggal = ? 
+          AND h.inv_sts_pro = 0 
+          AND d.invd_kode NOT LIKE 'JASA%' 
+          ${f.filter}
+    `;
 
-    const [rows] = await pool.query(query, params);
-    const stats = rows[0];
+    const [headerRows] = await pool.query(qHeader, params);
+    const [detailRows] = await pool.query(qDetail, params);
 
-    res.json({
-      todayTransactions: Number(stats.trx) || 0,
-      todayQty: Number(stats.qty) || 0,
-      todaySales: Number(stats.sales) || 0,
-    });
+    const gross = Number(detailRows[0]?.gross) || 0;
+    const disc = Number(headerRows[0]?.disc) || 0;
+    const ppn = Number(headerRows[0]?.ppn) || 0;
+
+    const stats = {
+      todayTransactions: Number(headerRows[0]?.trx) || 0,
+      todayQty: Number(detailRows[0]?.qty) || 0,
+      todaySales: gross - disc + ppn,
+    };
+
+    res.json(stats);
   } catch (error) {
     console.error("Error getTodayStats:", error);
     res.status(500).json({ message: "Gagal memuat statistik" });
@@ -223,16 +196,16 @@ const getBranchPerformance = async (req, res) => {
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
+  // STRUKTUR QUERY 100% COPY-PASTE DARI LOGIC WEB (getList)
+  // Disederhanakan hanya untuk 1 periode (Bulan Ini)
   const query = `
         WITH 
-        -- 1. [SALES] Hitung Bersih Per Invoice Dulu (SAMA PERSIS WEB)
-        -- Logika: (Total Item - Diskon Item) - Diskon Faktur - Biaya Marketplace
+        -- 1. [SAME AS WEB] Sales Netto per Invoice (Gross - Disc - MP Fee)
         InvoiceNetto AS (
             SELECT 
-                h.inv_nomor,
-                LEFT(h.inv_nomor, 3) AS cabang, -- Ambil kode cabang dari 3 digit awal nomor
+                LEFT(h.inv_nomor, 3) AS cabang,
                 (
-                    SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) 
+                    SUM((d.invd_harga - d.invd_diskon) * d.invd_jumlah) 
                     - COALESCE(h.inv_disc, 0)
                     - COALESCE(h.inv_mp_biaya_platform, 0)
                 ) AS nominal_netto
@@ -243,7 +216,7 @@ const getBranchPerformance = async (req, res) => {
             GROUP BY h.inv_nomor
         ),
 
-        -- 2. [RETUR] Hitung Retur (Pengurang) (SAMA PERSIS WEB)
+        -- 2. [SAME AS WEB] Retur Netto (Sebagai Pengurang)
         ReturNetto AS (
             SELECT 
                 LEFT(rh.rj_nomor, 3) AS cabang,
@@ -254,18 +227,23 @@ const getBranchPerformance = async (req, res) => {
             GROUP BY LEFT(rh.rj_nomor, 3)
         ),
 
-        -- 3. [GABUNG] Agregasi Sales + Retur per Cabang
-        SalesAgg AS (
-            -- a. Total Sales dari InvoiceNetto
+        -- 3. [SAME AS WEB] Gabungan (Union All)
+        CombinedData AS (
+            -- Ambil Sales (Positif)
             SELECT cabang, SUM(nominal_netto) AS nominal FROM InvoiceNetto GROUP BY cabang
-            
             UNION ALL
-            
-            -- b. Total Retur dari ReturNetto
+            -- Ambil Retur (Negatif)
             SELECT cabang, SUM(nominal_retur) AS nominal FROM ReturNetto GROUP BY cabang
         ),
 
-        -- 4. [TARGET] Target Omset
+        -- 4. Aggregasi Akhir (Total Netto per Cabang)
+        FinalSales AS (
+            SELECT cabang, SUM(nominal) AS total_omset
+            FROM CombinedData
+            GROUP BY cabang
+        ),
+
+        -- 5. Target (Tetap sama)
         TargetData AS (
             SELECT kode_gudang AS cabang, SUM(target_omset) AS target
             FROM kpi.ttarget_kaosan
@@ -273,41 +251,38 @@ const getBranchPerformance = async (req, res) => {
             GROUP BY cabang
         )
 
-        -- 5. [FINAL] Join ke Master Gudang
+        -- SELECT FINAL UNTUK DASHBOARD MOBILE
         SELECT 
             g.gdg_kode AS kode_cabang,
             g.gdg_nama AS nama_cabang,
             
-            -- Total Nominal = Sum of (Sales + Retur)
-            COALESCE(SUM(sa.nominal), 0) AS nominal,
-            
+            -- Nominal sudah bersih (Sales - Retur - Biaya2)
+            COALESCE(fs.total_omset, 0) AS nominal,
             COALESCE(td.target, 0) AS target,
             
             CASE 
                 WHEN COALESCE(td.target, 0) > 0 THEN 
-                    (COALESCE(SUM(sa.nominal), 0) / td.target) * 100 
+                    (COALESCE(fs.total_omset, 0) / td.target) * 100 
                 ELSE 0 
             END AS ach
 
         FROM tgudang g
-        LEFT JOIN SalesAgg sa ON g.gdg_kode = sa.cabang
+        LEFT JOIN FinalSales fs ON g.gdg_kode = fs.cabang
         LEFT JOIN TargetData td ON g.gdg_kode = td.cabang
         
         WHERE 
             (g.gdg_dc = 0 OR g.gdg_kode = 'KPR') 
             AND g.gdg_kode <> 'KDC'
+            -- Opsional: Hanya tampilkan yang ada angka (supaya list tidak penuh 0)
+            -- AND (COALESCE(fs.total_omset, 0) <> 0 OR COALESCE(td.target, 0) <> 0)
         
-        GROUP BY g.gdg_kode, g.gdg_nama, td.target
         ORDER BY ach DESC;
     `;
 
   const params = [
-    tahun,
-    bulan, // Param untuk InvoiceNetto (Sales)
-    tahun,
-    bulan, // Param untuk ReturNetto (Retur)
-    tahun,
-    bulan, // Param untuk TargetData
+    tahun, bulan, // Params InvoiceNetto
+    tahun, bulan, // Params ReturNetto
+    tahun, bulan  // Params TargetData
   ];
 
   try {
@@ -322,125 +297,70 @@ const getBranchPerformance = async (req, res) => {
 // --- 5. Chart Data ---
 const getSalesChart = async (req, res) => {
   try {
-    const { startDate, endDate, groupBy, cabang } = req.query;
+    const { startDate, endDate, groupBy, cabang } = req.query; // Ensure 'cabang' is read
     const user = req.user;
 
-    // 1. Filter Sales
-    const fSales = getBranchFilter(user, cabang, "h", "inv_cab");
+    let branchCondition = "";
+    const params = [startDate, endDate];
 
-    // 2. Filter Retur
-    let fRetur = { filter: "", params: [] };
+    // LOGIC FIX: Prioritize User Branch, then Filter
     if (user.cabang !== "KDC") {
-      fRetur.filter = " AND rh.rj_cab = ? ";
-      fRetur.params.push(user.cabang);
+      branchCondition = " AND h.inv_cab = ? ";
+      params.push(user.cabang);
     } else if (cabang && cabang !== "ALL") {
-      fRetur.filter = " AND rh.rj_cab = ? ";
-      fRetur.params.push(cabang);
+      branchCondition = " AND h.inv_cab = ? ";
+      params.push(cabang);
     }
 
-    // Format Tanggal Grouping
-    let dateGroup = "DATE(h.inv_tanggal)";
     let dateSelect = "DATE(h.inv_tanggal)";
-
-    let dateGroupRetur = "DATE(rh.rj_tanggal)";
-    let dateSelectRetur = "DATE(rh.rj_tanggal)";
-
-    if (groupBy === "month") {
-      dateGroup = "DATE_FORMAT(h.inv_tanggal, '%Y-%m-01')";
+    if (groupBy === "month")
       dateSelect = "DATE_FORMAT(h.inv_tanggal, '%Y-%m-01')";
 
-      dateGroupRetur = "DATE_FORMAT(rh.rj_tanggal, '%Y-%m-01')";
-      dateSelectRetur = "DATE_FORMAT(rh.rj_tanggal, '%Y-%m-01')";
-    }
+    // LOG FOR DEBUGGING BACKEND (Optional, check your terminal)
+    // console.log("Chart Filter:", cabang, "Condition:", branchCondition);
 
     const query = `
-        WITH 
-        -- A. SALES PER TANGGAL/BULAN (Netto)
-        SalesData AS (
-            SELECT 
-                ${dateSelect} AS tanggal,
-                SUM(
-                    (d.invd_jumlah * (d.invd_harga - d.invd_diskon)) 
-                    - COALESCE(h.inv_disc, 0) -- Perhatikan: ini asumsi 1 row per invoice di Group By Tanggal
-                                              -- TAPI, karena kita group by tanggal, kita harus hati-hati dengan inv_disc
-                                              -- Solusi terbaik: Subquery per invoice dulu baru group tanggal
-                ) AS val_salah -- Placeholder, pakai logic di bawah
-            FROM tinv_hdr h
-            -- ... Query ini berisiko jika langsung group by tanggal.
-            -- Gunakan CTE InvoiceNetto dulu!
-        ),
-        
-        InvoiceNetto AS (
-            SELECT 
-                h.inv_tanggal,
-                (
-                    SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) 
-                    - COALESCE(h.inv_disc, 0)
-                    - COALESCE(h.inv_mp_biaya_platform, 0)
-                    + COALESCE(h.inv_ppn, 0)
-                ) AS nominal_netto
-            FROM tinv_hdr h
-            JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
-            WHERE h.inv_tanggal BETWEEN ? AND ?
-              AND h.inv_sts_pro = 0
-              ${fSales.filter}
-            GROUP BY h.inv_nomor
-        ),
-        
-        GroupedSales AS (
-            SELECT 
-                ${
-                  groupBy === "month"
-                    ? "DATE_FORMAT(inv_tanggal, '%Y-%m-01')"
-                    : "DATE(inv_tanggal)"
-                } AS tanggal,
-                SUM(nominal_netto) AS total_sales
-            FROM InvoiceNetto
-            GROUP BY 1
-        ),
+      SELECT 
+        ${dateSelect} as tanggal,
+        (
+            (SELECT COALESCE(SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)), 0) 
+             FROM tinv_dtl d WHERE d.invd_inv_nomor IN (
+                SELECT inv_nomor FROM tinv_hdr h2 
+                WHERE DATE(h2.inv_tanggal) = DATE(h.inv_tanggal) 
+                ${branchCondition.replace(
+                  "h.",
+                  "h2."
+                )} -- FIX: Use alias h2 for subquery if needed, or rely on main WHERE
+             ))
+             -
+             SUM(h.inv_disc)
+        ) as total
+      FROM tinv_hdr h
+      WHERE h.inv_tanggal BETWEEN ? AND ?
+        AND h.inv_sts_pro = 0
+        ${branchCondition} -- Apply filter to main query
+      GROUP BY ${dateSelect}
+      ORDER BY tanggal ASC
+    `;
 
-        -- B. RETUR PER TANGGAL/BULAN
-        GroupedRetur AS (
-            SELECT 
-                ${
-                  groupBy === "month"
-                    ? "DATE_FORMAT(rj_tanggal, '%Y-%m-01')"
-                    : "DATE(rj_tanggal)"
-                } AS tanggal,
-                SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)) AS total_retur
-            FROM trj_hdr rh
-            JOIN trj_dtl rd ON rd.rjd_nomor = rh.rj_nomor
-            WHERE rh.rj_tanggal BETWEEN ? AND ?
-              ${fRetur.filter}
-            GROUP BY 1
-        ),
+    // NOTE: The subquery above is complex and might ignore the branch condition
+    // if not careful. Let's SIMPLIFY the query to ensure safety.
 
-        -- C. GABUNGAN (UNION ALL)
-        Combined AS (
-            SELECT tanggal, total_sales as nominal FROM GroupedSales
-            UNION ALL
-            SELECT tanggal, -total_retur as nominal FROM GroupedRetur
-        )
-
-        -- D. FINAL SELECT
+    // BETTER SIMPLE QUERY (Recommended):
+    const simpleQuery = `
         SELECT 
-            tanggal, 
-            SUM(nominal) as total
-        FROM Combined
-        GROUP BY tanggal
+            ${dateSelect} as tanggal,
+            SUM( (d.invd_jumlah * (d.invd_harga - d.invd_diskon)) ) - SUM(DISTINCT h.inv_disc) as total
+        FROM tinv_hdr h
+        JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
+        WHERE h.inv_tanggal BETWEEN ? AND ?
+          AND h.inv_sts_pro = 0
+          ${branchCondition}
+        GROUP BY ${dateSelect}
         ORDER BY tanggal ASC
     `;
 
-    const params = [
-      startDate,
-      endDate,
-      ...fSales.params, // InvoiceNetto
-      startDate,
-      endDate,
-      ...fRetur.params, // GroupedRetur
-    ];
-
-    const [rows] = await pool.query(query, params);
+    const [rows] = await pool.query(simpleQuery, params);
     res.json(rows);
   } catch (error) {
     console.error("Error getSalesChart:", error);
