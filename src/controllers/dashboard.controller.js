@@ -196,13 +196,13 @@ const getBranchPerformance = async (req, res) => {
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
+  // STRUKTUR QUERY 100% COPY-PASTE DARI LOGIC WEB (getList)
+  // Disederhanakan hanya untuk 1 periode (Bulan Ini)
   const query = `
         WITH 
-        -- 1. Hitung Netto Per Invoice (Sama persis dengan Web)
-        -- Mengurangi Diskon Faktur & Biaya Marketplace per nota
+        -- 1. [SAME AS WEB] Sales Netto per Invoice (Gross - Disc - MP Fee)
         InvoiceNetto AS (
             SELECT 
-                h.inv_nomor,
                 LEFT(h.inv_nomor, 3) AS cabang,
                 (
                     SUM((d.invd_harga - d.invd_diskon) * d.invd_jumlah) 
@@ -216,66 +216,77 @@ const getBranchPerformance = async (req, res) => {
             GROUP BY h.inv_nomor
         ),
 
-        -- 2. Aggregasi Sales Bulanan
-        MonthlySales AS (
+        -- 2. [SAME AS WEB] Retur Netto (Sebagai Pengurang)
+        ReturNetto AS (
             SELECT 
-                cabang, 
-                SUM(nominal_netto) AS nominal 
-            FROM InvoiceNetto
+                LEFT(rh.rj_nomor, 3) AS cabang,
+                -SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)) AS nominal_retur
+            FROM trj_hdr rh
+            JOIN trj_dtl rd ON rh.rj_nomor = rd.rjd_nomor
+            WHERE YEAR(rh.rj_tanggal) = ? AND MONTH(rh.rj_tanggal) = ?
+            GROUP BY LEFT(rh.rj_nomor, 3)
+        ),
+
+        -- 3. [SAME AS WEB] Gabungan (Union All)
+        CombinedData AS (
+            -- Ambil Sales (Positif)
+            SELECT cabang, SUM(nominal_netto) AS nominal FROM InvoiceNetto GROUP BY cabang
+            UNION ALL
+            -- Ambil Retur (Negatif)
+            SELECT cabang, SUM(nominal_retur) AS nominal FROM ReturNetto GROUP BY cabang
+        ),
+
+        -- 4. Aggregasi Akhir (Total Netto per Cabang)
+        FinalSales AS (
+            SELECT cabang, SUM(nominal) AS total_omset
+            FROM CombinedData
             GROUP BY cabang
         ),
 
-        -- 3. Aggregasi Target Bulanan
-        MonthlyTargets AS (
-            SELECT 
-                kode_gudang AS cabang, 
-                SUM(target_omset) AS target
+        -- 5. Target (Tetap sama)
+        TargetData AS (
+            SELECT kode_gudang AS cabang, SUM(target_omset) AS target
             FROM kpi.ttarget_kaosan
             WHERE tahun = ? AND bulan = ?
             GROUP BY cabang
-        ),
-
-        -- 4. Aggregasi Retur Bulanan
-        MonthlyReturns AS (
-            SELECT 
-                LEFT(rh.rj_nomor, 3) AS cabang,
-                SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)) AS total_retur
-            FROM trj_hdr rh
-            JOIN trj_dtl rd ON rd.rjd_nomor = rh.rj_nomor
-            WHERE YEAR(rh.rj_tanggal) = ? AND MONTH(rh.rj_tanggal) = ?
-            GROUP BY LEFT(rh.rj_nomor, 3)
         )
 
-        -- 5. Final Select (Join & Calc Achievement)
+        -- SELECT FINAL UNTUK DASHBOARD MOBILE
         SELECT 
             g.gdg_kode AS kode_cabang,
             g.gdg_nama AS nama_cabang,
             
-            -- Netto Akhir = SalesNetto - Retur
-            (COALESCE(ms.nominal, 0) - COALESCE(mr.total_retur, 0)) AS nominal,
-            
-            COALESCE(mt.target, 0) AS target,
+            -- Nominal sudah bersih (Sales - Retur - Biaya2)
+            COALESCE(fs.total_omset, 0) AS nominal,
+            COALESCE(td.target, 0) AS target,
             
             CASE 
-                WHEN COALESCE(mt.target, 0) > 0 THEN 
-                    ((COALESCE(ms.nominal, 0) - COALESCE(mr.total_retur, 0)) / mt.target) * 100 
+                WHEN COALESCE(td.target, 0) > 0 THEN 
+                    (COALESCE(fs.total_omset, 0) / td.target) * 100 
                 ELSE 0 
             END AS ach
 
         FROM tgudang g
-        LEFT JOIN MonthlySales ms ON g.gdg_kode = ms.cabang
-        LEFT JOIN MonthlyTargets mt ON g.gdg_kode = mt.cabang
-        LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
+        LEFT JOIN FinalSales fs ON g.gdg_kode = fs.cabang
+        LEFT JOIN TargetData td ON g.gdg_kode = td.cabang
         
         WHERE 
             (g.gdg_dc = 0 OR g.gdg_kode = 'KPR') 
             AND g.gdg_kode <> 'KDC'
+            -- Opsional: Hanya tampilkan yang ada angka (supaya list tidak penuh 0)
+            -- AND (COALESCE(fs.total_omset, 0) <> 0 OR COALESCE(td.target, 0) <> 0)
         
         ORDER BY ach DESC;
     `;
 
-  // Parameter diulang 3x (Sales, Target, Retur)
-  const params = [tahun, bulan, tahun, bulan, tahun, bulan];
+  const params = [
+    tahun,
+    bulan, // Params InvoiceNetto
+    tahun,
+    bulan, // Params ReturNetto
+    tahun,
+    bulan, // Params TargetData
+  ];
 
   try {
     const [rows] = await pool.query(query, params);
