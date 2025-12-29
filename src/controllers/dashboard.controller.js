@@ -711,30 +711,25 @@ const getProductSalesSpread = async (req, res) => {
 const getNegativeStockReport = async (req, res) => {
   try {
     const user = req.user;
-    // Parameter dari frontend: tanggal (default hari ini), cabang (opsional)
-    const { tanggal, cabang } = req.query; 
-    
-    const filterDate = tanggal || moment().format("YYYY-MM-DD");
-    let cabangFilter = "";
-    const params = [filterDate]; // Param pertama: tanggal
+    const { cabang } = req.query;
 
-    // LOGIKA FILTER CABANG (Sesuai Referensi)
+    // Params awal kosong (karena kita hapus filter tanggal)
+    const params = [];
+    let cabangFilter = "";
+
+    // LOGIKA FILTER CABANG (Diperbaiki)
     if (user.cabang !== "KDC") {
-        // 1. User Cabang: Hanya bisa lihat cabangnya sendiri
-        cabangFilter = "AND mst_cab = ?";
-        params.push(user.cabang);
+      // 1. User Cabang: Kunci ke cabangnya sendiri
+      cabangFilter = "AND mst_cab = ?";
+      params.push(user.cabang);
     } else {
-        // 2. User KDC
-        if (cabang && cabang !== 'KDC' && cabang !== 'ALL') {
-            // Jika memilih cabang spesifik (misal 'K01')
-            cabangFilter = "AND mst_cab = ?";
-            params.push(cabang);
-        } else {
-            // Jika memilih 'SEMUA' atau 'KDC': Ambil stok dari gudang-gudang DC saja
-            // Asumsi: Kita ingin memantau stok minus di cabang-cabang toko
-            cabangFilter = "AND mst_cab IN (SELECT gdg_kode FROM tgudang WHERE gdg_dc = 0 OR gdg_kode = 'KPR')"; 
-            // Note: Sesuaikan filter gdg_dc ini dengan kebutuhan bisnis Anda (0=Toko, 1=Gudang Pusat)
-        }
+      // 2. User KDC
+      if (cabang && cabang !== "KDC" && cabang !== "ALL") {
+        // Pilih cabang spesifik
+        cabangFilter = "AND mst_cab = ?";
+        params.push(cabang);
+      }
+      // Jika 'ALL', biarkan cabangFilter kosong agar mengambil SEMUA gudang (Toko + DC)
     }
 
     const query = `
@@ -755,7 +750,7 @@ const getNegativeStockReport = async (req, res) => {
               SUM(mst_stok_in - mst_stok_out) AS stok
           FROM tmasterstok
           WHERE mst_aktif = 'Y'
-            AND mst_tanggal <= ? 
+            -- HAPUS filter tanggal agar menghitung total stok real-time sampai detik ini
             ${cabangFilter}
           GROUP BY mst_brg_kode, mst_ukuran, mst_cab
           HAVING stok < 0
@@ -763,14 +758,17 @@ const getNegativeStockReport = async (req, res) => {
       LEFT JOIN tbarangdc a ON a.brg_kode = s.mst_brg_kode
       LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = s.mst_brg_kode AND b.brgd_ukuran = s.mst_ukuran
       LEFT JOIN tgudang g ON g.gdg_kode = s.mst_cab
-      WHERE a.brg_logstok = 'Y'
-      ORDER BY s.stok ASC -- Urutkan dari yang paling minus
-      LIMIT 20; -- Batasi agar dashboard tidak berat
+      WHERE a.brg_logstok = 'Y' 
+      ORDER BY s.stok ASC
+      LIMIT 20;
     `;
+
+    // Debugging (Cek di terminal backend jika masih kosong)
+    // console.log('Query Stok Minus:', query);
+    // console.log('Params:', params);
 
     const [rows] = await pool.query(query, params);
     res.json({ success: true, data: rows });
-
   } catch (error) {
     console.error("Error getNegativeStockReport:", error);
     res.status(500).json({ message: "Gagal memuat stok minus" });

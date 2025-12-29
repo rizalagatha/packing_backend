@@ -1,37 +1,50 @@
 const pool = require("../config/database");
 
-// [MANAGER] Mengambil daftar request yang pending (status = 'P')
+// [MANAGER/STORE] Mengambil daftar request yang pending (status = 'P')
 const getPendingRequests = async (req, res) => {
   try {
-    const user = req.user; 
+    const user = req.user;
     let query = "";
     let params = [];
 
-    // Logika: Jika user KDC (Pusat), lihat semua. 
-    // Jika cabang, hanya lihat cabang sendiri.
+    // --- PERBAIKAN LOGIKA SQL DI SINI ---
+
     if (user.cabang === "KDC") {
+      // 1. LOGIKA MANAGER (KDC):
+      // Hanya melihat request yang bersifat UMUM (Internal) atau TARGETNYA KDC.
+      // Jangan tampilkan request yang ditujukan khusus ke Toko lain (o_target = 'K01', dll).
       query = `
         SELECT * FROM totorisasi 
         WHERE o_status = 'P' 
+          AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC')
         ORDER BY o_created DESC
       `;
     } else {
+      // 2. LOGIKA USER TOKO (K01, dll):
+      // Melihat request jika:
+      // A. Request DITUJUKAN ke saya (o_target = 'K01') -> Kasus Ambil Barang
+      // B. Request DIBUAT oleh saya (o_cab = 'K01') -> Kasus Otorisasi Internal
       query = `
         SELECT * FROM totorisasi 
-        WHERE o_status = 'P' AND o_cab = ? 
+        WHERE o_status = 'P' 
+          AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))
         ORDER BY o_created DESC
       `;
-      params.push(user.cabang);
+      // Kita perlu push user.cabang dua kali untuk mengisi dua tanda tanya (?) di atas
+      params.push(user.cabang, user.cabang);
     }
+
+    // Debugging (Opsional: Cek di terminal backend)
+    // console.log("User:", user.kode, "Cabang:", user.cabang);
+    // console.log("Query:", query);
+    // console.log("Params:", params);
 
     const [rows] = await pool.query(query, params);
 
-    // [PENTING] Kembalikan array kosong [] jika tidak ada data, jangan null/error
     res.status(200).json({
       success: true,
-      data: rows || [], 
+      data: rows || [],
     });
-
   } catch (error) {
     console.error("Error getPendingRequests:", error);
     res.status(500).json({
@@ -41,9 +54,9 @@ const getPendingRequests = async (req, res) => {
   }
 };
 
-// [MANAGER] Melakukan Approve atau Reject
+// [MANAGER/STORE] Melakukan Approve atau Reject
 const processRequest = async (req, res) => {
-  const { authNomor, action } = req.body; // action: 'APPROVE' | 'REJECT'
+  const { authNomor, action } = req.body;
   const user = req.user;
 
   if (!authNomor || !["APPROVE", "REJECT"].includes(action)) {
@@ -54,32 +67,36 @@ const processRequest = async (req, res) => {
   }
 
   try {
-    // Tentukan status baru: 
-    // 'Y' = Approved (Yes)
-    // 'N' = Rejected (No)
-    const newStatus = action === "APPROVE" ? 'Y' : 'N';
+    const newStatus = action === "APPROVE" ? "Y" : "N";
 
-    // [FIX] Update status dan approver.
-    // Hapus update o_pin untuk menghindari error data too long.
-    // Pastikan hanya mengupdate data yang statusnya masih 'P' (Pending)
+    // [UPDATE] Gunakan user.kode (ID unik) sebagai approver, bukan nama, agar lebih presisi
+    const approverName = user.kode || user.nama;
+
     const query = `
         UPDATE totorisasi 
         SET o_status = ?, o_approver = ?, o_approved_at = NOW()
         WHERE o_nomor = ? AND o_status = 'P'
     `;
 
-    const [result] = await pool.query(query, [newStatus, user.nama, authNomor]);
+    const [result] = await pool.query(query, [
+      newStatus,
+      approverName,
+      authNomor,
+    ]);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message: "Gagal memproses. Request mungkin sudah diproses atau tidak ditemukan.",
+        message:
+          "Gagal memproses. Request mungkin sudah diproses atau tidak ditemukan.",
       });
     }
 
     res.status(200).json({
       success: true,
-      message: `Otorisasi berhasil di-${action === "APPROVE" ? "setujui" : "tolak"}.`,
+      message: `Otorisasi berhasil di-${
+        action === "APPROVE" ? "setujui" : "tolak"
+      }.`,
     });
   } catch (error) {
     console.error("Error processRequest:", error);
