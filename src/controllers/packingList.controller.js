@@ -398,7 +398,7 @@ const getHistory = async (req, res) => {
             
             -- Agregat
             COUNT(d.pld_kode) AS JmlJenis,
-            COALESCE(SUM(d.pld_jumlah), 0) AS TotalQty
+            CAST(COALESCE(SUM(d.pld_jumlah), 0) AS UNSIGNED) AS TotalQty
 
         FROM tpacking_list_hdr h
         INNER JOIN tpacking_list_dtl d ON d.pld_nomor = h.pl_nomor
@@ -437,7 +437,7 @@ const getHistoryDetail = async (req, res) => {
             d.pld_kode AS Kode,
             TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS Nama,
             d.pld_ukuran AS Ukuran,
-            d.pld_jumlah AS Jumlah
+            CAST(d.pld_jumlah AS UNSIGNED) AS Jumlah
         FROM tpacking_list_dtl d
         LEFT JOIN tbarangdc a ON a.brg_kode = d.pld_kode
         WHERE d.pld_nomor = ?
