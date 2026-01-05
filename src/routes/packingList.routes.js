@@ -21,4 +21,10 @@ router.get("/barcode/:barcode", packingListController.findProductByBarcode);
 // 5. Lookup Permintaan (Modal Search)
 router.get("/search-permintaan", packingListController.searchPermintaanOpen);
 
+// Ambil Daftar Riwayat Packing List (Filter Tanggal)
+router.get('/history/list', verifyToken, controller.getHistory);
+
+// Ambil Detail Item Riwayat (untuk Accordion/Expand)
+router.get('/history/:nomor/detail', verifyToken, controller.getHistoryDetail);
+
 module.exports = router;

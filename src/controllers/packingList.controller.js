@@ -248,10 +248,11 @@ const loadItemsFromRequest = async (req, res) => {
 
     // Kembalikan array data ke frontend
     res.json(rows);
-
   } catch (error) {
     console.error("Error loadItemsFromRequest:", error);
-    res.status(500).json({ message: "Terjadi kesalahan saat memuat item permintaan." });
+    res
+      .status(500)
+      .json({ message: "Terjadi kesalahan saat memuat item permintaan." });
   }
 };
 
@@ -300,14 +301,14 @@ const findProductByBarcode = async (req, res) => {
  * REVISI: Disamakan logikanya dengan SuratJalanScreen (Cek tdc_sj_hdr)
  */
 const searchPermintaanOpen = async (req, res) => {
-  const { term = '', page = 1, storeKode } = req.query;
-  
+  const { term = "", page = 1, storeKode } = req.query;
+
   // Debugging: Cek apa yang diterima backend
   console.log("[API] Search Permintaan:", { term, page, storeKode });
 
   try {
     if (!storeKode) {
-        return res.json([]); 
+      return res.json([]);
     }
 
     const itemsPerPage = 20;
@@ -315,13 +316,13 @@ const searchPermintaanOpen = async (req, res) => {
     const searchTerm = `%${term}%`;
 
     const params = [
-        storeKode,      // 1. LEFT(mt_nomor, 3)
-        searchTerm,     // 2. LIKE mt_nomor
-        searchTerm,     // 3. LIKE mt_tanggal
-        searchTerm,     // 4. LIKE mt_otomatis
-        searchTerm,     // 5. LIKE mt_ket
-        itemsPerPage,   // 6. LIMIT
-        offset          // 7. OFFSET
+      storeKode, // 1. LEFT(mt_nomor, 3)
+      searchTerm, // 2. LIKE mt_nomor
+      searchTerm, // 3. LIKE mt_tanggal
+      searchTerm, // 4. LIKE mt_otomatis
+      searchTerm, // 5. LIKE mt_ket
+      itemsPerPage, // 6. LIMIT
+      offset, // 7. OFFSET
     ];
 
     const query = `
@@ -354,12 +355,103 @@ const searchPermintaanOpen = async (req, res) => {
     `;
 
     const [rows] = await pool.query(query, params);
-    
+
     console.log(`[API] Found ${rows.length} permintaan for store ${storeKode}`);
     res.json(rows);
-
   } catch (error) {
     console.error("Error searchPermintaanOpen:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/**
+ * 6. Ambil Riwayat Packing List
+ * Filter: StartDate, EndDate
+ */
+const getHistory = async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const user = req.user; // Jika ingin filter per cabang user
+
+  try {
+    // Query digabung dengan detail untuk hitung total item & qty
+    const query = `
+        SELECT 
+            h.pl_nomor AS Nomor,
+            h.pl_tanggal AS Tanggal,
+            h.pl_cab_tujuan AS Store,
+            g.gdg_nama AS Nama_Store,
+            h.pl_mt_nomor AS NoMinta,
+            
+            -- Logika Status
+            CASE 
+                WHEN h.pl_status = 'O' THEN 'OPEN'
+                -- Jika Closed tapi belum ada No Terima di SJ (atau SJ belum dibuat), anggap SENT
+                WHEN h.pl_status = 'C' AND (sj.sj_noterima IS NULL OR sj.sj_noterima = '') THEN 'SENT'
+                -- Jika Closed dan sudah ada No Terima
+                WHEN h.pl_status = 'C' AND sj.sj_noterima <> '' THEN 'RECEIVED'
+                ELSE h.pl_status 
+            END AS Status,
+
+            IFNULL(sj.sj_noterima, '-') AS NoTerima,
+            IFNULL(h.pl_sj_nomor, '-') AS NoSJFinal,
+            h.pl_ket AS Keterangan,
+            
+            -- Agregat
+            COUNT(d.pld_kode) AS JmlJenis,
+            COALESCE(SUM(d.pld_jumlah), 0) AS TotalQty
+
+        FROM tpacking_list_hdr h
+        INNER JOIN tpacking_list_dtl d ON d.pld_nomor = h.pl_nomor
+        LEFT JOIN tgudang g ON g.gdg_kode = h.pl_cab_tujuan
+        LEFT JOIN tdc_sj_hdr sj ON sj.sj_nomor = h.pl_sj_nomor
+        
+        WHERE h.pl_tanggal BETWEEN ? AND ?
+        -- Opsional: Filter Cabang User jika bukan orang gudang pusat
+        -- AND h.pl_cab_tujuan = ? 
+
+        GROUP BY h.pl_nomor 
+        ORDER BY h.pl_tanggal DESC, h.pl_nomor DESC
+    `;
+
+    const [rows] = await pool.query(query, [startDate, endDate]);
+
+    res.json({
+      success: true,
+      data: rows,
+    });
+  } catch (error) {
+    console.error("Error getHistory PackingList:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/**
+ * 7. Ambil Detail Item untuk Riwayat (Expand)
+ */
+const getHistoryDetail = async (req, res) => {
+  const { nomor } = req.params;
+
+  try {
+    const query = `
+        SELECT 
+            d.pld_kode AS Kode,
+            TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS Nama,
+            d.pld_ukuran AS Ukuran,
+            d.pld_jumlah AS Jumlah
+        FROM tpacking_list_dtl d
+        LEFT JOIN tbarangdc a ON a.brg_kode = d.pld_kode
+        WHERE d.pld_nomor = ?
+        ORDER BY d.pld_kode, d.pld_ukuran
+    `;
+
+    const [rows] = await pool.query(query, [nomor]);
+
+    res.json({
+      success: true,
+      data: rows,
+    });
+  } catch (error) {
+    console.error("Error getHistoryDetail PackingList:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -370,4 +462,6 @@ module.exports = {
   loadItemsFromRequest,
   findProductByBarcode,
   searchPermintaanOpen,
+  getHistory,
+  getHistoryDetail,
 };
