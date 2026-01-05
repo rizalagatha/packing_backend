@@ -118,6 +118,16 @@ const savePackingList = async (req, res) => {
       }
     }
 
+    // --- [TAMBAHAN] UPDATE STATUS MINTA BARANG ---
+    if (header.permintaan) {
+      await connection.query(
+        `UPDATE tmintabarang_hdr 
+         SET mt_close = 'Y', user_modified = ?, date_modified = NOW() 
+         WHERE mt_nomor = ?`,
+        [user.kode, header.permintaan]
+      );
+    }
+
     await connection.commit();
 
     res.json({
