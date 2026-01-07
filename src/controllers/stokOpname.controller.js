@@ -61,12 +61,12 @@ const downloadMasterBarang = async (req, res) => {
   }
 };
 
-// 2. Upload Hasil (Revisi: Terima parameter cabang tujuan)
+// 2. Upload Hasil (Integrasi ke tabel thitungstok)
 const uploadHasilOpname = async (req, res) => {
-  const { items, targetCabang } = req.body; // <-- Terima targetCabang dari body
+  const { items, targetCabang } = req.body;
   const user = req.user;
 
-  // Jika tidak dikirim, fallback ke cabang user sendiri
+  // Gunakan cabang tujuan yang dipilih user (atau fallback ke cabang user)
   const cabangTujuan = targetCabang || user.cabang;
 
   let connection;
@@ -74,37 +74,47 @@ const uploadHasilOpname = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    const insertQuery = `
-            INSERT INTO tstokopname_temp (so_cab, so_user, so_tanggal, so_barcode, so_kode, so_qty_fisik, so_qty_sistem, date_create)
-            VALUES ?
-        `;
+    /**
+     * Menggunakan ON DUPLICATE KEY UPDATE.
+     * Jika (hs_cab, hs_lokasi, hs_barcode) sudah ada, maka qty akan ditambah.
+     * date_create menggunakan CURDATE() sesuai standar tabel thitungstok.
+     */
+    const query = `
+      INSERT INTO thitungstok 
+        (hs_cab, hs_lokasi, hs_barcode, hs_kode, hs_nama, hs_ukuran, hs_qty, hs_proses, date_create, user_create)
+      VALUES ?
+      ON DUPLICATE KEY UPDATE 
+        hs_qty = hs_qty + VALUES(hs_qty),
+        hs_nama = VALUES(hs_nama)
+    `;
 
+    // Map data dari mobile ke kolom thitungstok
     const values = items.map((item) => [
-      cabangTujuan, // <-- Gunakan cabang tujuan yang dipilih
-      user.kode,
-      new Date(),
-      item.barcode,
-      item.kode,
-      item.qty_fisik,
-      item.stok_sistem,
-      new Date(),
+      cabangTujuan,         // hs_cab
+      item.lokasi || '',    // hs_lokasi
+      item.barcode,         // hs_barcode
+      item.kode,            // hs_kode
+      item.nama,            // hs_nama
+      item.ukuran,          // hs_ukuran
+      item.qty_fisik,       // hs_qty
+      'N',                  // hs_proses (Belum diproses)
+      new Date(),           // date_create
+      user.kode,            // user_create
     ]);
 
     if (values.length > 0) {
-      await connection.query(insertQuery, [values]);
+      await connection.query(query, [values]);
     }
 
     await connection.commit();
     res.status(200).json({
       success: true,
-      message: `Data opname untuk ${cabangTujuan} berhasil diupload.`,
+      message: `Berhasil upload ${items.length} item ke thitungstok cabang ${cabangTujuan}.`,
     });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error uploadHasilOpname:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Gagal mengupload data opname." });
+    res.status(500).json({ success: false, message: error.message });
   } finally {
     if (connection) connection.release();
   }
