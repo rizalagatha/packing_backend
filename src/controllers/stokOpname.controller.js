@@ -72,17 +72,17 @@ const uploadHasilOpname = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    // Logika OVERWRITE: hs_qty = VALUES(hs_qty)
-    // Data lama akan ditimpa dengan data baru dari HP
+    // --- LOGIKA AKUMULASI (CUMULATIVE) ---
+    // hs_qty = hs_qty + VALUES(hs_qty) -> Menambahkan hasil scan baru ke data lama
     const query = `
       INSERT INTO thitungstok 
         (hs_cab, hs_lokasi, hs_barcode, hs_kode, hs_nama, hs_ukuran, hs_qty, hs_proses, hs_device, hs_operator, date_create, user_create)
       VALUES ?
       ON DUPLICATE KEY UPDATE 
-        hs_qty = VALUES(hs_qty), 
+        hs_qty = hs_qty + VALUES(hs_qty), 
         hs_device = VALUES(hs_device),
-        hs_operator = VALUES(hs_operator), -- Update nama orang terakhir yang scan rak ini
-        user_create = VALUES(user_create), -- Akun login terakhir
+        hs_operator = VALUES(hs_operator),
+        user_create = VALUES(user_create),
         date_create = VALUES(date_create)
     `;
 
@@ -96,7 +96,7 @@ const uploadHasilOpname = async (req, res) => {
       item.qty_fisik,
       "N",
       deviceInfo || "Unknown",
-      operatorName || "No Name", // <-- Masuk ke kolom hs_operator
+      operatorName || "No Name",
       new Date(),
       user.kode,
     ]);
@@ -108,7 +108,7 @@ const uploadHasilOpname = async (req, res) => {
     await connection.commit();
     res.status(200).json({
       success: true,
-      message: `Data berhasil diupload dan diperbarui (Overwrite Mode).`,
+      message: `Berhasil upload parsial. Data telah dijumlahkan di server.`,
     });
   } catch (error) {
     if (connection) await connection.rollback();
