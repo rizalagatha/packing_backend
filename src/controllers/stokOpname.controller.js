@@ -63,7 +63,7 @@ const downloadMasterBarang = async (req, res) => {
 
 // 2. Upload Hasil (Integrasi ke tabel thitungstok)
 const uploadHasilOpname = async (req, res) => {
-  const { items, targetCabang } = req.body;
+  const { items, targetCabang, deviceInfo, operatorName } = req.body;
   const user = req.user;
   const cabangTujuan = targetCabang || user.cabang;
 
@@ -76,12 +76,13 @@ const uploadHasilOpname = async (req, res) => {
     // Data lama akan ditimpa dengan data baru dari HP
     const query = `
       INSERT INTO thitungstok 
-        (hs_cab, hs_lokasi, hs_barcode, hs_kode, hs_nama, hs_ukuran, hs_qty, hs_proses, date_create, user_create)
+        (hs_cab, hs_lokasi, hs_barcode, hs_kode, hs_nama, hs_ukuran, hs_qty, hs_proses, hs_device, hs_operator, date_create, user_create)
       VALUES ?
       ON DUPLICATE KEY UPDATE 
         hs_qty = VALUES(hs_qty), 
-        hs_nama = VALUES(hs_nama),
-        user_create = VALUES(user_create),
+        hs_device = VALUES(hs_device),
+        hs_operator = VALUES(hs_operator), -- Update nama orang terakhir yang scan rak ini
+        user_create = VALUES(user_create), -- Akun login terakhir
         date_create = VALUES(date_create)
     `;
 
@@ -94,6 +95,8 @@ const uploadHasilOpname = async (req, res) => {
       item.ukuran,
       item.qty_fisik,
       "N",
+      deviceInfo || "Unknown",
+      operatorName || "No Name", // <-- Masuk ke kolom hs_operator
       new Date(),
       user.kode,
     ]);
