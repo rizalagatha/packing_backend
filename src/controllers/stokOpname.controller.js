@@ -65,8 +65,6 @@ const downloadMasterBarang = async (req, res) => {
 const uploadHasilOpname = async (req, res) => {
   const { items, targetCabang } = req.body;
   const user = req.user;
-
-  // Gunakan cabang tujuan yang dipilih user (atau fallback ke cabang user)
   const cabangTujuan = targetCabang || user.cabang;
 
   let connection;
@@ -74,32 +72,30 @@ const uploadHasilOpname = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    /**
-     * Menggunakan ON DUPLICATE KEY UPDATE.
-     * Jika (hs_cab, hs_lokasi, hs_barcode) sudah ada, maka qty akan ditambah.
-     * date_create menggunakan CURDATE() sesuai standar tabel thitungstok.
-     */
+    // Logika OVERWRITE: hs_qty = VALUES(hs_qty)
+    // Data lama akan ditimpa dengan data baru dari HP
     const query = `
       INSERT INTO thitungstok 
         (hs_cab, hs_lokasi, hs_barcode, hs_kode, hs_nama, hs_ukuran, hs_qty, hs_proses, date_create, user_create)
       VALUES ?
       ON DUPLICATE KEY UPDATE 
-        hs_qty = hs_qty + VALUES(hs_qty),
-        hs_nama = VALUES(hs_nama)
+        hs_qty = VALUES(hs_qty), 
+        hs_nama = VALUES(hs_nama),
+        user_create = VALUES(user_create),
+        date_create = VALUES(date_create)
     `;
 
-    // Map data dari mobile ke kolom thitungstok
     const values = items.map((item) => [
-      cabangTujuan,         // hs_cab
-      item.lokasi || '',    // hs_lokasi
-      item.barcode,         // hs_barcode
-      item.kode,            // hs_kode
-      item.nama,            // hs_nama
-      item.ukuran,          // hs_ukuran
-      item.qty_fisik,       // hs_qty
-      'N',                  // hs_proses (Belum diproses)
-      new Date(),           // date_create
-      user.kode,            // user_create
+      cabangTujuan,
+      item.lokasi || "",
+      item.barcode,
+      item.kode,
+      item.nama,
+      item.ukuran,
+      item.qty_fisik,
+      "N",
+      new Date(),
+      user.kode,
     ]);
 
     if (values.length > 0) {
@@ -109,11 +105,10 @@ const uploadHasilOpname = async (req, res) => {
     await connection.commit();
     res.status(200).json({
       success: true,
-      message: `Berhasil upload ${items.length} item ke thitungstok cabang ${cabangTujuan}.`,
+      message: `Data berhasil diupload dan diperbarui (Overwrite Mode).`,
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Error uploadHasilOpname:", error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     if (connection) connection.release();
