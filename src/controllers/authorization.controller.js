@@ -67,29 +67,56 @@ const processRequest = async (req, res) => {
   }
 
   try {
-    const newStatus = action === "APPROVE" ? "Y" : "N";
+    // 1. AMBIL DETAIL JENIS REQUEST DULU
+    const [checkRows] = await pool.query(
+      "SELECT o_jenis FROM totorisasi WHERE o_nomor = ?",
+      [authNomor]
+    );
 
-    // [UPDATE] Gunakan user.kode (ID unik) sebagai approver, bukan nama, agar lebih presisi
-    const approverName = user.kode || user.nama;
+    if (checkRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Data otorisasi tidak ditemukan.",
+      });
+    }
 
+    const o_jenis = checkRows[0].o_jenis;
+    const userKodeUpper = String(user.kode).toUpperCase();
     const today = new Date();
-    const isEstuPeriod =
+
+    // Periode Pengalihan: 12 Jan s/d 16 Jan 2026
+    const isEstuManagerPeriod =
       today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
 
-    if (isEstuPeriod && user.kode === "HARIS") {
+    // 2. VALIDASI KEAMANAN BERDASARKAN ROLE & TANGGAL
+
+    // A. Proteksi HARIS: Dilarang approve apapun selama periode 12-16 Jan
+    if (isEstuManagerPeriod && userKodeUpper === "HARIS") {
       return res.status(403).json({
         success: false,
         message:
-          "Hak otorisasi Anda sedang dialihkan ke ESTU hingga 16 Jan 2026.",
+          "Hak otorisasi Manager sedang dialihkan ke ESTU hingga 16 Jan 2026.",
       });
     }
 
-    if (!isEstuPeriod && user.kode === "ESTU") {
-      return res.status(403).json({
-        success: false,
-        message: "Masa tugas otorisasi sementara Anda telah berakhir.",
-      });
+    // B. Proteksi ESTU:
+    if (userKodeUpper === "ESTU") {
+      const isPeminjaman = o_jenis === "PEMINJAMAN_BARANG";
+
+      // Estu hanya boleh approve jika itu PEMINJAMAN_BARANG
+      // ATAU jika sedang masuk periode manager (12-16 Jan)
+      if (!isPeminjaman && !isEstuManagerPeriod) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "Anda hanya berwenang untuk otorisasi Peminjaman Barang di luar periode 12-16 Jan.",
+        });
+      }
     }
+
+    // 3. EKSEKUSI UPDATE KE DATABASE
+    const newStatus = action === "APPROVE" ? "Y" : "N";
+    const approverName = user.kode || user.nama;
 
     const query = `
         UPDATE totorisasi 
@@ -107,7 +134,7 @@ const processRequest = async (req, res) => {
       return res.status(404).json({
         success: false,
         message:
-          "Gagal memproses. Request mungkin sudah diproses atau tidak ditemukan.",
+          "Gagal memproses. Request mungkin sudah diproses oleh manager lain.",
       });
     }
 
