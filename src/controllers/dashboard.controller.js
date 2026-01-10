@@ -32,52 +32,64 @@ const getBranchFilter = (
 const getTodayStats = async (req, res) => {
   try {
     const user = req.user;
-    const { cabang } = req.query; // Ambil parameter filter cabang
+    const { cabang } = req.query;
     const today = moment().format("YYYY-MM-DD");
+    const isKDC = user.cabang === "KDC";
 
-    // Gunakan helper untuk konsistensi
-    const f = getBranchFilter(user, cabang, "h", "inv_cab");
+    // Regex untuk exclude Custom Order di perhitungan QTY
+    const excludePattern = "^K[0-9]{2}\\.(SD|BR|PM|DP|TG|PL|SB)\\.";
 
-    // Params dasar [today] + params dari filter cabang
-    const params = [today, ...f.params];
+    let branchFilter = "AND h.inv_cab = ?";
+    let params = [today, today, excludePattern];
 
-    const qHeader = `
-        SELECT 
-            COUNT(*) as trx, 
-            SUM(inv_disc) as disc, 
-            SUM(inv_ppn) as ppn 
-        FROM tinv_hdr h 
-        WHERE h.inv_tanggal = ? 
-          AND h.inv_sts_pro = 0 
-          ${f.filter} 
+    if (isKDC) {
+      if (cabang && cabang !== "ALL") {
+        params.push(cabang);
+      } else {
+        branchFilter = "";
+      }
+    } else {
+      params.push(user.cabang);
+    }
+
+    const query = `
+      SELECT
+        COUNT(DISTINCT h.inv_nomor) AS trx,
+        -- Total Omset (Logic sama dengan Web)
+        SUM(
+            (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
+             FROM tinv_dtl dd 
+             WHERE dd.invd_inv_nomor = h.inv_nomor) 
+            - h.inv_disc 
+            + (h.inv_ppn / 100 * (
+                (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
+                 FROM tinv_dtl dd 
+                 WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc
+              ))
+            + h.inv_bkrm
+        ) AS todaySales,
+        -- Total Qty (Exclude Jasa & Custom Regex)
+        IFNULL(SUM(
+          (SELECT SUM(dd.invd_jumlah) 
+           FROM tinv_dtl dd 
+           WHERE dd.invd_inv_nomor = h.inv_nomor
+             AND dd.invd_kode NOT LIKE 'JASA%' 
+             AND dd.invd_kode NOT REGEXP ?)
+        ), 0) AS todayQty
+      FROM tinv_hdr h
+      WHERE h.inv_sts_pro = 0 
+        AND h.inv_tanggal BETWEEN ? AND ?
+        ${branchFilter};
     `;
 
-    const qDetail = `
-        SELECT 
-            SUM(d.invd_jumlah) as qty, 
-            SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)) as gross
-        FROM tinv_hdr h 
-        JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
-        WHERE h.inv_tanggal = ? 
-          AND h.inv_sts_pro = 0 
-          AND d.invd_kode NOT LIKE 'JASA%' 
-          ${f.filter}
-    `;
+    const [rows] = await pool.query(query, params);
+    const result = rows[0];
 
-    const [headerRows] = await pool.query(qHeader, params);
-    const [detailRows] = await pool.query(qDetail, params);
-
-    const gross = Number(detailRows[0]?.gross) || 0;
-    const disc = Number(headerRows[0]?.disc) || 0;
-    const ppn = Number(headerRows[0]?.ppn) || 0;
-
-    const stats = {
-      todayTransactions: Number(headerRows[0]?.trx) || 0,
-      todayQty: Number(detailRows[0]?.qty) || 0,
-      todaySales: gross - disc + ppn,
-    };
-
-    res.json(stats);
+    res.json({
+      todayTransactions: Number(result.trx) || 0,
+      todayQty: Number(result.todayQty) || 0,
+      todaySales: Number(result.todaySales) || 0,
+    });
   } catch (error) {
     console.error("Error getTodayStats:", error);
     res.status(500).json({ message: "Gagal memuat statistik" });
@@ -89,27 +101,33 @@ const getTotalPiutang = async (req, res) => {
   try {
     const user = req.user;
     const { cabang } = req.query;
-
-    // Filter piutang biasanya pakai LEFT(ph_inv_nomor, 3) atau ph_cab jika ada kolomnya
-    // Asumsi ph_inv_nomor formatnya "K01-..."
-    let f = { filter: "", params: [] };
+    let branchFilter = "";
+    let params = [];
 
     if (user.cabang !== "KDC") {
-      f.filter = " AND LEFT(ph.ph_inv_nomor, 3) = ? ";
-      f.params.push(user.cabang);
+      branchFilter = " AND ph.ph_cab = ? ";
+      params.push(user.cabang);
     } else if (cabang && cabang !== "ALL") {
-      f.filter = " AND LEFT(ph.ph_inv_nomor, 3) = ? ";
-      f.params.push(cabang);
+      branchFilter = " AND ph.ph_cab = ? ";
+      params.push(cabang);
     }
 
     const query = `
-      SELECT SUM( GREATEST(0, (SELECT SUM(pd_debet) FROM tpiutang_dtl WHERE pd_ph_nomor = ph.ph_nomor) - (SELECT SUM(pd_kredit) FROM tpiutang_dtl WHERE pd_ph_nomor = ph.ph_nomor)) ) AS totalSisaPiutang
+      SELECT 
+        SUM(GREATEST(0, IFNULL(v.debet, 0) - IFNULL(v.kredit, 0))) AS totalSisaPiutang
       FROM tpiutang_hdr ph
-      WHERE 1=1 ${f.filter}
+      LEFT JOIN (
+          SELECT pd_ph_nomor, 
+                 SUM(pd_debet) AS debet, 
+                 SUM(pd_kredit) AS kredit 
+          FROM tpiutang_dtl 
+          GROUP BY pd_ph_nomor
+      ) v ON v.pd_ph_nomor = ph.ph_nomor
+      WHERE 1=1 ${branchFilter}
     `;
 
-    const [rows] = await pool.query(query, f.params);
-    res.json({ totalSisaPiutang: rows[0].totalSisaPiutang || 0 });
+    const [rows] = await pool.query(query, params);
+    res.json({ totalSisaPiutang: Number(rows[0].totalSisaPiutang) || 0 });
   } catch (error) {
     console.error("Error getTotalPiutang:", error);
     res.status(500).json({ message: "Gagal memuat piutang" });
@@ -123,65 +141,64 @@ const getSalesTargetSummary = async (req, res) => {
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
-  // Filter Sales (tinv_hdr)
-  const fSales = getBranchFilter(user, cabang, "h", "inv_cab");
+  let branchFilter = "";
+  let params = [tahun, bulan, tahun, bulan];
 
-  // Filter Target (ttarget_kaosan)
-  // Perhatikan: kolom cabang di target mungkin beda nama (misal: kode_gudang)
-  let fTarget = { filter: "", params: [] };
   if (user.cabang !== "KDC") {
-    fTarget.filter = " AND t.kode_gudang = ? ";
-    fTarget.params.push(user.cabang);
+    branchFilter = " AND h.inv_cab = ? ";
+    params.push(user.cabang);
   } else if (cabang && cabang !== "ALL") {
-    fTarget.filter = " AND t.kode_gudang = ? ";
-    fTarget.params.push(cabang);
+    branchFilter = " AND h.inv_cab = ? ";
+    params.push(cabang);
   }
 
-  let salesQuery = `
-        SELECT 
-            (SELECT COALESCE(SUM(d.invd_jumlah * (d.invd_harga - d.invd_diskon)), 0)
-             FROM tinv_hdr h
-             JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
-             WHERE h.inv_sts_pro = 0 
-               AND YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ?
-               ${fSales.filter}
-            ) 
-            - 
-            (SELECT COALESCE(SUM(h.inv_disc), 0)
-             FROM tinv_hdr h
-             WHERE h.inv_sts_pro = 0 
-               AND YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ?
-               ${fSales.filter}
-            ) as nominal
-    `;
+  // Logic: (Gross - ItemDisc - HeaderDisc - MP Fee)
+  const salesQuery = `
+    SELECT 
+      SUM(
+        (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
+         FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor)
+        - h.inv_disc 
+        - COALESCE(h.inv_mp_biaya_platform, 0)
+      ) AS nominal
+    FROM tinv_hdr h
+    WHERE h.inv_sts_pro = 0 
+      AND YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ?
+      ${branchFilter}
+  `;
 
-  let salesParams = [
-    tahun,
-    bulan,
-    ...fSales.params,
-    tahun,
-    bulan,
-    ...fSales.params,
-  ];
-
-  let targetQuery = `
-        SELECT SUM(t.target_omset) as target
-        FROM kpi.ttarget_kaosan t 
-        WHERE t.tahun = ? AND t.bulan = ? 
-        ${fTarget.filter}
-    `;
-  let targetParams = [tahun, bulan, ...fTarget.params];
+  // Target query
+  const targetQuery = `
+    SELECT SUM(target_omset) as target 
+    FROM kpi.ttarget_kaosan 
+    WHERE tahun = ? AND bulan = ? 
+    ${
+      user.cabang !== "KDC"
+        ? "AND kode_gudang = ?"
+        : cabang && cabang !== "ALL"
+        ? "AND kode_gudang = ?"
+        : ""
+    }
+  `;
 
   try {
     const [salesResult, targetResult] = await Promise.all([
-      pool.query(salesQuery, salesParams),
-      pool.query(targetQuery, targetParams),
+      pool.query(salesQuery, params),
+      pool.query(targetQuery, [
+        tahun,
+        bulan,
+        ...(user.cabang !== "KDC"
+          ? [user.cabang]
+          : cabang && cabang !== "ALL"
+          ? [cabang]
+          : []),
+      ]),
     ]);
 
-    const nominal = salesResult[0][0].nominal || 0;
-    const target = targetResult[0][0].target || 0;
-
-    res.json({ nominal, target });
+    res.json({
+      nominal: Number(salesResult[0][0].nominal) || 0,
+      target: Number(targetResult[0][0].target) || 0,
+    });
   } catch (error) {
     console.error("Error getSalesTargetSummary:", error);
     res.status(500).json({ message: "Gagal memuat target" });
