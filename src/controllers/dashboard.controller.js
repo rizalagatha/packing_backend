@@ -35,11 +35,9 @@ const getTodayStats = async (req, res) => {
     const { cabang } = req.query;
     const today = moment().format("YYYY-MM-DD");
     const isKDC = user.cabang === "KDC";
-
     const excludePattern = "^K[0-9]{2}\\.(SD|BR|PM|DP|TG|PL|SB)\\.";
 
     let branchFilter = "AND h.inv_cab = ?";
-    // URUTAN PARAMS HARUS: [Regex, TanggalStart, TanggalEnd, Cabang(optional)]
     let params = [excludePattern, today, today];
 
     if (isKDC) {
@@ -54,32 +52,32 @@ const getTodayStats = async (req, res) => {
     }
 
     const query = `
-  SELECT
-    COUNT(DISTINCT h.inv_nomor) AS trx,
-    -- Gunakan ROUND untuk mencegah margin desimal
-    ROUND(SUM(
-        (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
-         FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) 
-        - h.inv_disc 
-        + (h.inv_ppn / 100 * (
+      SELECT
+        COUNT(DISTINCT h.inv_nomor) AS trx,
+        -- Menggunakan COALESCE agar nilai NULL tidak membuat hasil SUM menjadi NULL/0
+        -- Menggunakan ROUND untuk menghilangkan margin desimal ribuan
+        ROUND(SUM(
             (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
-             FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc
-          ))
-        + h.inv_bkrm
-        - COALESCE(h.inv_mp_biaya_platform, 0) -- WAJIB ADA: Pengurang biaya marketplace
-    )) AS todaySales,
-    
-    IFNULL(SUM(
-      (SELECT SUM(dd.invd_jumlah) FROM tinv_dtl dd 
-       WHERE dd.invd_inv_nomor = h.inv_nomor
-         AND dd.invd_kode NOT LIKE 'JASA%' 
-         AND dd.invd_kode NOT REGEXP ?)
-    ), 0) AS todayQty
-  FROM tinv_hdr h
-  WHERE h.inv_sts_pro = 0 
-    AND h.inv_tanggal BETWEEN ? AND ?
-    ${branchFilter};
-`;
+             FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) 
+            - COALESCE(h.inv_disc, 0) 
+            + (COALESCE(h.inv_ppn, 0) / 100 * (
+                (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
+                 FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) - COALESCE(h.inv_disc, 0)
+              ))
+            + COALESCE(h.inv_bkrm, 0)
+        ), 0) AS todaySales,
+        
+        IFNULL(SUM(
+          (SELECT SUM(dd.invd_jumlah) FROM tinv_dtl dd 
+           WHERE dd.invd_inv_nomor = h.inv_nomor
+             AND dd.invd_kode NOT LIKE 'JASA%' 
+             AND dd.invd_kode NOT REGEXP ?)
+        ), 0) AS todayQty
+      FROM tinv_hdr h
+      WHERE h.inv_sts_pro = 0 
+        AND h.inv_tanggal BETWEEN ? AND ?
+        ${branchFilter};
+    `;
 
     const [rows] = await pool.query(query, params);
     res.json({
@@ -110,7 +108,8 @@ const getTotalPiutang = async (req, res) => {
 
     const query = `
       SELECT 
-        SUM(GREATEST(0, IFNULL(v.debet, 0) - IFNULL(v.kredit, 0))) AS totalSisaPiutang
+        -- ROUND dan COALESCE untuk akurasi ribuan
+        ROUND(SUM(GREATEST(0, IFNULL(v.debet, 0) - IFNULL(v.kredit, 0))), 0) AS totalSisaPiutang
       FROM tpiutang_hdr ph
       LEFT JOIN (
           SELECT pd_ph_nomor, 
@@ -125,7 +124,6 @@ const getTotalPiutang = async (req, res) => {
     const [rows] = await pool.query(query, params);
     res.json({ totalSisaPiutang: Number(rows[0].totalSisaPiutang) || 0 });
   } catch (error) {
-    console.error("Error getTotalPiutang:", error);
     res.status(500).json({ message: "Gagal memuat piutang" });
   }
 };
