@@ -89,6 +89,9 @@ app.use("/api/authorization", authorizationRoutes);
 const laporanStokRoutes = require("./src/routes/laporanStok.routes.js");
 app.use("/api/laporan-stok", laporanStokRoutes);
 
+const ambilBarangRoutes = require("./src/routes/ambilBarang.routes.js");
+app.use("/api/ambil-barang-form", ambilBarangRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
