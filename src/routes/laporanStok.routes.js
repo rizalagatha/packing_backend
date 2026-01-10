@@ -11,4 +11,6 @@ router.get("/real-time", laporanStokController.getRealTimeStock);
 // Laporan Stok Menipis (Low Stock)
 router.get("/low-stock", laporanStokController.getLowStock);
 
+router.get("/gudang-options", laporanStokController.getGudangOptions);
+
 module.exports = router;
