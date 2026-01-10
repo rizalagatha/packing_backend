@@ -72,6 +72,25 @@ const processRequest = async (req, res) => {
     // [UPDATE] Gunakan user.kode (ID unik) sebagai approver, bukan nama, agar lebih presisi
     const approverName = user.kode || user.nama;
 
+    const today = new Date();
+    const isEstuPeriod =
+      today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
+
+    if (isEstuPeriod && user.kode === "HARIS") {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Hak otorisasi Anda sedang dialihkan ke ESTU hingga 16 Jan 2026.",
+      });
+    }
+
+    if (!isEstuPeriod && user.kode === "ESTU") {
+      return res.status(403).json({
+        success: false,
+        message: "Masa tugas otorisasi sementara Anda telah berakhir.",
+      });
+    }
+
     const query = `
         UPDATE totorisasi 
         SET o_status = ?, o_approver = ?, o_approved_at = NOW()
