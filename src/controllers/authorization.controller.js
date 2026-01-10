@@ -86,7 +86,7 @@ const processRequest = async (req, res) => {
 
     // Periode Pengalihan: 12 Jan s/d 16 Jan 2026
     const isEstuManagerPeriod =
-      today >= new Date(2026, 0, 10) && today < new Date(2026, 0, 17);
+      today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
 
     // 2. VALIDASI KEAMANAN BERDASARKAN ROLE & TANGGAL
 
