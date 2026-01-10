@@ -6,10 +6,12 @@ const { authenticateToken } = require("../middlewares/auth.middleware");
 // Middleware Token wajib untuk semua route di bawah ini
 router.use(authenticateToken);
 
-// GET /api/authorization/pending -> List request status 0
-router.get("/pending", controller.getPendingRequests);
+// Endpoint untuk HP yang meminta otorisasi
+router.post("/request", controller.createRequest);
+router.get("/status/:authNomor", controller.checkStatus);
 
-// POST /api/authorization/process -> Action Approve/Reject
+// Endpoint untuk Manager/Store yang meng-approve
+router.get("/pending", controller.getPendingRequests);
 router.post("/process", controller.processRequest);
 
 module.exports = router;

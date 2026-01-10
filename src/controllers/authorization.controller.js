@@ -1,56 +1,212 @@
 const pool = require("../config/database");
+const { format } = require("date-fns");
+const fcmService = require("../services/fcm.service"); // Pastikan path ini benar
 
-// [MANAGER/STORE] Mengambil daftar request yang pending (status = 'P')
+// --- HELPER INTERNAL ---
+const generateAuthNumber = async (cabang) => {
+  const date = new Date();
+  const yyMM = format(date, "yyMM");
+  const prefix = `${cabang}.AUTH.${yyMM}.`;
+
+  const query = `
+        SELECT o_nomor 
+        FROM totorisasi 
+        WHERE o_nomor LIKE ? 
+        ORDER BY o_nomor DESC 
+        LIMIT 1
+    `;
+
+  const [rows] = await pool.query(query, [`${prefix}%`]);
+
+  let sequence = 1;
+  if (rows.length > 0) {
+    const lastNomor = rows[0].o_nomor;
+    const lastSeqString = lastNomor.split(".").pop();
+    const lastSeq = parseInt(lastSeqString, 10);
+    if (!isNaN(lastSeq)) sequence = lastSeq + 1;
+  }
+
+  return `${prefix}${sequence.toString().padStart(4, "0")}`;
+};
+
+// --- CONTROLLER FUNCTIONS ---
+
+// 1. [REQUESTER] Membuat permintaan otorisasi baru
+const createRequest = async (req, res) => {
+  try {
+    const {
+      transaksi,
+      jenis,
+      keterangan,
+      nominal,
+      cabang,
+      barcode,
+      target_cabang,
+    } = req.body;
+    const user = req.user.kode; // User yang sedang login di HP
+
+    // A. Generate Nomor & Simpan ke DB
+    const authNomor = await generateAuthNumber(cabang);
+    const query = `
+            INSERT INTO totorisasi 
+            (o_nomor, o_transaksi, o_jenis, o_ket, o_nominal, o_cab, o_status, o_requester, o_created, o_pin, o_barcode, o_target)
+            VALUES (?, ?, ?, ?, ?, ?, 'P', ?, NOW(), '-', ?, ?)
+        `;
+
+    await pool.query(query, [
+      authNomor,
+      transaksi || "NEW_TRX",
+      jenis,
+      keterangan,
+      nominal || 0,
+      cabang,
+      user,
+      barcode || "",
+      target_cabang || null,
+    ]);
+
+    // B. Logika Notifikasi FCM
+    try {
+      const title = `Permintaan Otorisasi: ${jenis.replace(/_/g, " ")}`;
+      const body = `Req: ${user} (Dari: ${cabang})\nKet: ${
+        keterangan.split("\n")[0]
+      }`;
+      const dataPayload = {
+        jenis: String(jenis),
+        nominal: String(nominal),
+        transaksi: String(transaksi || ""),
+        authId: String(authNomor),
+      };
+
+      // JALUR 1: Jika Ambil Barang antar Toko
+      if (
+        jenis === "AMBIL_BARANG" &&
+        target_cabang &&
+        target_cabang !== "KDC"
+      ) {
+        const targetTopic = `approval_${target_cabang}`;
+        await fcmService.sendToTopic(targetTopic, title, body, dataPayload);
+      }
+      // JALUR 2: Kirim ke Manager (KDC)
+      else {
+        const today = new Date();
+        const isEstuManagerPeriod =
+          today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
+        const isPeminjaman = jenis === "PEMINJAMAN_BARANG";
+
+        let managerCodes = ["DARUL"]; // Darul selalu dikirim
+
+        if (isPeminjaman) managerCodes.push("ESTU");
+
+        if (isEstuManagerPeriod) {
+          if (!managerCodes.includes("ESTU")) managerCodes.push("ESTU");
+        } else {
+          managerCodes.push("HARIS");
+        }
+
+        // Ambil token FCM manager
+        const [managers] = await pool.query(
+          `SELECT DISTINCT user_fcm_token FROM tuser 
+                     WHERE user_kode IN (?) AND user_fcm_token IS NOT NULL AND user_fcm_token != ''`,
+          [managerCodes]
+        );
+
+        if (managers.length > 0) {
+          const sendPromises = managers.map((mgr) =>
+            fcmService.sendNotification(
+              mgr.user_fcm_token,
+              title,
+              body,
+              dataPayload
+            )
+          );
+          await Promise.all(sendPromises);
+        }
+      }
+    } catch (fcmError) {
+      console.error("[FCM Error] Gagal kirim notifikasi:", fcmError.message);
+    }
+
+    res
+      .status(201)
+      .json({
+        success: true,
+        message: "Permintaan otorisasi terkirim.",
+        authNomor,
+      });
+  } catch (error) {
+    console.error("Error createRequest:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal membuat permintaan otorisasi." });
+  }
+};
+
+// 2. [REQUESTER] Cek status otorisasi (Polling dari HP)
+const checkStatus = async (req, res) => {
+  try {
+    const { authNomor } = req.params;
+    const query = `SELECT o_status, o_approver FROM totorisasi WHERE o_nomor = ?`;
+    const [rows] = await pool.query(query, [authNomor]);
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Data tidak ditemukan." });
+    }
+
+    const data = rows[0];
+    res.status(200).json({
+      success: true,
+      status:
+        data.o_status === "Y"
+          ? "ACC"
+          : data.o_status === "N"
+          ? "TOLAK"
+          : "WAIT",
+      approver: data.o_approver,
+    });
+  } catch (error) {
+    console.error("Error checkStatus:", error);
+    res.status(500).json({ success: false, message: "Gagal mengecek status." });
+  }
+};
+
+// 3. [MANAGER] List pending requests (Sudah ada di kode Anda)
 const getPendingRequests = async (req, res) => {
   try {
     const user = req.user;
     const userKodeUpper = String(user.kode).toUpperCase();
     const today = new Date();
-
-    // Periode Pengalihan: 12 Jan s/d 16 Jan 2026
     const isEstuManagerPeriod =
       today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
 
-    let query = "";
+    let query = "SELECT * FROM totorisasi WHERE o_status = 'P' ";
     let params = [];
 
     if (user.cabang === "KDC") {
-      // --- LOGIKA FILTER UNTUK USER PUSAT ---
-
       if (userKodeUpper === "ESTU") {
-        if (isEstuManagerPeriod) {
-          // 12-16 JAN: Estu lihat SEMUA (Manager + Peminjaman)
-          query = `SELECT * FROM totorisasi WHERE o_status = 'P' 
-                   AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis = 'PEMINJAMAN_BARANG')`;
-        } else {
-          // NORMAL: Estu HANYA boleh lihat Peminjaman Barang
-          query = `SELECT * FROM totorisasi WHERE o_status = 'P' AND o_jenis = 'PEMINJAMAN_BARANG'`;
-        }
+        query += isEstuManagerPeriod
+          ? "AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis = 'PEMINJAMAN_BARANG')"
+          : "AND o_jenis = 'PEMINJAMAN_BARANG'";
       } else if (userKodeUpper === "HARIS") {
-        if (isEstuManagerPeriod) {
-          // 12-16 JAN: Haris tidak melihat apa-apa (Menu kosong)
-          query = `SELECT * FROM totorisasi WHERE 1=0`;
-        } else {
-          // NORMAL: Haris lihat semua transaksi Manager
-          query = `SELECT * FROM totorisasi WHERE o_status = 'P' 
-                   AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC')`;
-        }
+        query += isEstuManagerPeriod
+          ? "AND 1=0"
+          : "AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC')";
       } else {
-        // User lain (misal DARUL): Tetap lihat semua transaksi Manager
-        query = `SELECT * FROM totorisasi WHERE o_status = 'P' 
-                 AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis = 'PEMINJAMAN_BARANG')`;
+        query +=
+          "AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis = 'PEMINJAMAN_BARANG')";
       }
     } else {
-      // Logika User Toko tetap sama seperti sebelumnya
-      query = `SELECT * FROM totorisasi WHERE o_status = 'P' 
-               AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))`;
+      query +=
+        "AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))";
       params.push(user.cabang, user.cabang);
     }
 
+    query += " ORDER BY o_created DESC";
     const [rows] = await pool.query(query, params);
     res.status(200).json({ success: true, data: rows || [] });
   } catch (error) {
-    console.error("Error getPendingRequests:", error);
     res.status(500).json({ success: false, message: "Gagal memuat data." });
   }
 };
@@ -155,6 +311,8 @@ const processRequest = async (req, res) => {
 };
 
 module.exports = {
+  createRequest,
+  checkStatus,
   getPendingRequests,
   processRequest,
 };
