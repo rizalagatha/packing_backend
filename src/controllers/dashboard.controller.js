@@ -36,14 +36,15 @@ const getTodayStats = async (req, res) => {
     const today = moment().format("YYYY-MM-DD");
     const isKDC = user.cabang === "KDC";
 
-    // Regex untuk exclude Custom Order di perhitungan QTY
     const excludePattern = "^K[0-9]{2}\\.(SD|BR|PM|DP|TG|PL|SB)\\.";
 
     let branchFilter = "AND h.inv_cab = ?";
-    let params = [today, today, excludePattern];
+    // URUTAN PARAMS HARUS: [Regex, TanggalStart, TanggalEnd, Cabang(optional)]
+    let params = [excludePattern, today, today];
 
     if (isKDC) {
       if (cabang && cabang !== "ALL") {
+        branchFilter = "AND h.inv_cab = ?";
         params.push(cabang);
       } else {
         branchFilter = "";
@@ -55,43 +56,37 @@ const getTodayStats = async (req, res) => {
     const query = `
       SELECT
         COUNT(DISTINCT h.inv_nomor) AS trx,
-        -- Total Omset (Logic sama dengan Web)
+        -- Perhitungan Omset Sama dengan Web (Gross - Disc + PPN_Value + Bkrm)
         SUM(
             (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
-             FROM tinv_dtl dd 
-             WHERE dd.invd_inv_nomor = h.inv_nomor) 
+             FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) 
             - h.inv_disc 
             + (h.inv_ppn / 100 * (
                 (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
-                 FROM tinv_dtl dd 
-                 WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc
+                 FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc
               ))
             + h.inv_bkrm
         ) AS todaySales,
         -- Total Qty (Exclude Jasa & Custom Regex)
         IFNULL(SUM(
-          (SELECT SUM(dd.invd_jumlah) 
-           FROM tinv_dtl dd 
+          (SELECT SUM(dd.invd_jumlah) FROM tinv_dtl dd 
            WHERE dd.invd_inv_nomor = h.inv_nomor
              AND dd.invd_kode NOT LIKE 'JASA%' 
-             AND dd.invd_kode NOT REGEXP ?)
+             AND dd.invd_kode NOT REGEXP ?) -- Placeholder ke-1
         ), 0) AS todayQty
       FROM tinv_hdr h
       WHERE h.inv_sts_pro = 0 
-        AND h.inv_tanggal BETWEEN ? AND ?
+        AND h.inv_tanggal BETWEEN ? AND ? -- Placeholder ke-2 & 3
         ${branchFilter};
     `;
 
     const [rows] = await pool.query(query, params);
-    const result = rows[0];
-
     res.json({
-      todayTransactions: Number(result.trx) || 0,
-      todayQty: Number(result.todayQty) || 0,
-      todaySales: Number(result.todaySales) || 0,
+      todayTransactions: Number(rows[0].trx) || 0,
+      todayQty: Number(rows[0].todayQty) || 0,
+      todaySales: Number(rows[0].todaySales) || 0,
     });
   } catch (error) {
-    console.error("Error getTodayStats:", error);
     res.status(500).json({ message: "Gagal memuat statistik" });
   }
 };
@@ -136,13 +131,13 @@ const getTotalPiutang = async (req, res) => {
 
 // --- 3. SALES TARGET SUMMARY (OPTIMALISASI UTAMA) ---
 const getSalesTargetSummary = async (req, res) => {
-  const user = req.user;
   const { cabang } = req.query;
+  const user = req.user;
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
   let branchFilter = "";
-  let params = [tahun, bulan, tahun, bulan];
+  let params = [tahun, bulan];
 
   if (user.cabang !== "KDC") {
     branchFilter = " AND h.inv_cab = ? ";
@@ -152,161 +147,109 @@ const getSalesTargetSummary = async (req, res) => {
     params.push(cabang);
   }
 
-  // Logic: (Gross - ItemDisc - HeaderDisc - MP Fee)
-  const salesQuery = `
+  const query = `
     SELECT 
-      SUM(
-        (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
-         FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor)
-        - h.inv_disc 
-        - COALESCE(h.inv_mp_biaya_platform, 0)
-      ) AS nominal
+        -- Formula Omset Netto (Sama dengan Web)
+        IFNULL(SUM(
+            (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) 
+            - h.inv_disc 
+            + (h.inv_ppn / 100 * ((SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc))
+            + h.inv_bkrm
+            - COALESCE(h.inv_mp_biaya_platform, 0)
+        ), 0) AS nominal,
+        -- Target Bulanan
+        IFNULL((
+            SELECT SUM(t.target_omset) FROM kpi.ttarget_kaosan t 
+            WHERE t.tahun = ? AND t.bulan = ? 
+            ${
+              user.cabang !== "KDC"
+                ? "AND t.kode_gudang = ?"
+                : cabang && cabang !== "ALL"
+                ? "AND t.kode_gudang = ?"
+                : ""
+            }
+        ), 0) AS target
     FROM tinv_hdr h
-    WHERE h.inv_sts_pro = 0 
-      AND YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ?
-      ${branchFilter}
+    WHERE h.inv_sts_pro = 0 AND YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ?
+    ${branchFilter};
   `;
 
-  // Target query
-  const targetQuery = `
-    SELECT SUM(target_omset) as target 
-    FROM kpi.ttarget_kaosan 
-    WHERE tahun = ? AND bulan = ? 
-    ${
-      user.cabang !== "KDC"
-        ? "AND kode_gudang = ?"
-        : cabang && cabang !== "ALL"
-        ? "AND kode_gudang = ?"
-        : ""
-    }
-  `;
+  // Susun ulang params karena ada subquery target di tengah
+  const targetParams = [tahun, bulan];
+  if (user.cabang !== "KDC") targetParams.push(user.cabang);
+  else if (cabang && cabang !== "ALL") targetParams.push(cabang);
 
   try {
-    const [salesResult, targetResult] = await Promise.all([
-      pool.query(salesQuery, params),
-      pool.query(targetQuery, [
-        tahun,
-        bulan,
-        ...(user.cabang !== "KDC"
-          ? [user.cabang]
-          : cabang && cabang !== "ALL"
-          ? [cabang]
-          : []),
-      ]),
+    const [rows] = await pool.query(query, [
+      ...targetParams,
+      tahun,
+      bulan,
+      ...(branchFilter ? [params[2]] : []),
     ]);
-
-    res.json({
-      nominal: Number(salesResult[0][0].nominal) || 0,
-      target: Number(targetResult[0][0].target) || 0,
-    });
+    res.json(rows[0]);
   } catch (error) {
-    console.error("Error getSalesTargetSummary:", error);
-    res.status(500).json({ message: "Gagal memuat target" });
+    res.status(500).json({ message: "Gagal" });
   }
 };
 
 // --- 4. PERFORMA CABANG (OPTIMALISASI UTAMA) ---
 const getBranchPerformance = async (req, res) => {
-  const user = req.user;
-  if (user.cabang !== "KDC") return res.json([]);
-
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
-  // STRUKTUR QUERY 100% COPY-PASTE DARI LOGIC WEB (getList)
-  // Disederhanakan hanya untuk 1 periode (Bulan Ini)
   const query = `
-        WITH 
-        -- 1. [SAME AS WEB] Sales Netto per Invoice (Gross - Disc - MP Fee)
-        InvoiceNetto AS (
-            SELECT 
-                LEFT(h.inv_nomor, 3) AS cabang,
-                (
-                    SUM((d.invd_harga - d.invd_diskon) * d.invd_jumlah) 
-                    - COALESCE(h.inv_disc, 0)
-                    - COALESCE(h.inv_mp_biaya_platform, 0)
-                ) AS nominal_netto
-            FROM tinv_hdr h
-            JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
-            WHERE YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ? 
-              AND h.inv_sts_pro = 0
-            GROUP BY h.inv_nomor
-        ),
-
-        -- 2. [SAME AS WEB] Retur Netto (Sebagai Pengurang)
-        ReturNetto AS (
-            SELECT 
-                LEFT(rh.rj_nomor, 3) AS cabang,
-                -SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)) AS nominal_retur
-            FROM trj_hdr rh
-            JOIN trj_dtl rd ON rh.rj_nomor = rd.rjd_nomor
-            WHERE YEAR(rh.rj_tanggal) = ? AND MONTH(rh.rj_tanggal) = ?
-            GROUP BY LEFT(rh.rj_nomor, 3)
-        ),
-
-        -- 3. [SAME AS WEB] Gabungan (Union All)
-        CombinedData AS (
-            -- Ambil Sales (Positif)
-            SELECT cabang, SUM(nominal_netto) AS nominal FROM InvoiceNetto GROUP BY cabang
-            UNION ALL
-            -- Ambil Retur (Negatif)
-            SELECT cabang, SUM(nominal_retur) AS nominal FROM ReturNetto GROUP BY cabang
-        ),
-
-        -- 4. Aggregasi Akhir (Total Netto per Cabang)
-        FinalSales AS (
-            SELECT cabang, SUM(nominal) AS total_omset
-            FROM CombinedData
-            GROUP BY cabang
-        ),
-
-        -- 5. Target (Tetap sama)
-        TargetData AS (
-            SELECT kode_gudang AS cabang, SUM(target_omset) AS target
-            FROM kpi.ttarget_kaosan
-            WHERE tahun = ? AND bulan = ?
-            GROUP BY cabang
-        )
-
-        -- SELECT FINAL UNTUK DASHBOARD MOBILE
+    WITH MonthlySales AS (
         SELECT 
-            g.gdg_kode AS kode_cabang,
-            g.gdg_nama AS nama_cabang,
-            
-            -- Nominal sudah bersih (Sales - Retur - Biaya2)
-            COALESCE(fs.total_omset, 0) AS nominal,
-            COALESCE(td.target, 0) AS target,
-            
-            CASE 
-                WHEN COALESCE(td.target, 0) > 0 THEN 
-                    (COALESCE(fs.total_omset, 0) / td.target) * 100 
-                ELSE 0 
-            END AS ach
+            h.inv_cab AS cabang,
+            -- Omset termasuk PPN dan Biaya Kirim
+            SUM(
+                (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) 
+                - h.inv_disc 
+                + (h.inv_ppn / 100 * ((SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc))
+                + h.inv_bkrm
+                - COALESCE(h.inv_mp_biaya_platform, 0)
+            ) AS nominal_bersih
+        FROM tinv_hdr h
+        WHERE YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ? AND h.inv_sts_pro = 0
+        GROUP BY h.inv_cab
+    ),
+    MonthlyReturns AS (
+        SELECT 
+            rh.rj_cab AS cabang,
+            SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)) AS total_retur
+        FROM trj_hdr rh
+        JOIN trj_dtl rd ON rd.rjd_nomor = rh.rj_nomor
+        WHERE YEAR(rh.rj_tanggal) = ? AND MONTH(rh.rj_tanggal) = ?
+        GROUP BY rh.rj_cab
+    ),
+    TargetData AS (
+        SELECT kode_gudang AS cabang, SUM(target_omset) AS target
+        FROM kpi.ttarget_kaosan
+        WHERE tahun = ? AND bulan = ?
+        GROUP BY cabang
+    )
+    SELECT 
+        g.gdg_kode AS kode_cabang,
+        g.gdg_nama AS nama_cabang,
+        COALESCE(ms.nominal_bersih, 0) - COALESCE(mr.total_retur, 0) AS nominal,
+        COALESCE(td.target, 0) AS target,
+        CASE WHEN COALESCE(td.target, 0) > 0 
+             THEN ((COALESCE(ms.nominal_bersih, 0) - COALESCE(mr.total_retur, 0)) / td.target) * 100 
+             ELSE 0 END AS ach
+    FROM tgudang g
+    LEFT JOIN MonthlySales ms ON g.gdg_kode = ms.cabang
+    LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
+    LEFT JOIN TargetData td ON g.gdg_kode = td.cabang
+    WHERE (g.gdg_dc = 0 OR g.gdg_kode = 'KPR' OR g.gdg_kode = 'KON') AND g.gdg_kode <> 'KDC'
+    ORDER BY ach DESC;
+  `;
 
-        FROM tgudang g
-        LEFT JOIN FinalSales fs ON g.gdg_kode = fs.cabang
-        LEFT JOIN TargetData td ON g.gdg_kode = td.cabang
-        
-        WHERE 
-            (g.gdg_dc = 0 OR g.gdg_kode = 'KPR') 
-            AND g.gdg_kode <> 'KDC'
-            -- Opsional: Hanya tampilkan yang ada angka (supaya list tidak penuh 0)
-            -- AND (COALESCE(fs.total_omset, 0) <> 0 OR COALESCE(td.target, 0) <> 0)
-        
-        ORDER BY ach DESC;
-    `;
-
-  const params = [
-    tahun, bulan, // Params InvoiceNetto
-    tahun, bulan, // Params ReturNetto
-    tahun, bulan  // Params TargetData
-  ];
+  const params = [tahun, bulan, tahun, bulan, tahun, bulan];
 
   try {
     const [rows] = await pool.query(query, params);
     res.json(rows);
   } catch (error) {
-    console.error("Error getBranchPerformance:", error);
     res.status(500).json({ message: "Gagal memuat performa cabang" });
   }
 };
