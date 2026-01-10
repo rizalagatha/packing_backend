@@ -163,27 +163,34 @@ const getLowStock = async (req, res) => {
  */
 const getGudangOptions = async (req, res) => {
   try {
-    const user = req.user; // Ambil dari middleware auth
+    const user = req.user;
     let query = "";
     let params = [];
 
     if (user.cabang === "KDC") {
-      // Jika user pusat, bisa lihat semua
+      // User KDC tetap bisa lihat semua
       query = `
         SELECT 'ALL' AS kode, 'SEMUA GUDANG' AS nama
         UNION ALL
         SELECT gdg_kode AS kode, gdg_nama AS nama FROM tgudang ORDER BY kode;
       `;
     } else {
-      // Jika user toko, hanya bisa lihat cabangnya sendiri dan KDC
-      query = 'SELECT gdg_kode AS kode, gdg_nama AS nama FROM tgudang WHERE gdg_kode="KDC" OR gdg_kode = ?';
+      // User Store hanya bisa melihat cabangnya sendiri DAN KDC Pusat
+      query = `
+        SELECT gdg_kode AS kode, gdg_nama AS nama 
+        FROM tgudang 
+        WHERE gdg_kode = 'KDC' OR gdg_kode = ?
+        ORDER BY (gdg_kode = 'KDC') DESC; -- KDC muncul di paling atas
+      `;
       params.push(user.cabang);
     }
-    
+
     const [rows] = await pool.query(query, params);
     res.json({ success: true, data: rows });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Gagal memuat daftar gudang." });
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal memuat daftar gudang." });
   }
 };
 
