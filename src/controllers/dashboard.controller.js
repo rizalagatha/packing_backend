@@ -54,31 +54,32 @@ const getTodayStats = async (req, res) => {
     }
 
     const query = `
-      SELECT
-        COUNT(DISTINCT h.inv_nomor) AS trx,
-        -- Perhitungan Omset Sama dengan Web (Gross - Disc + PPN_Value + Bkrm)
-        SUM(
+  SELECT
+    COUNT(DISTINCT h.inv_nomor) AS trx,
+    -- Gunakan ROUND untuk mencegah margin desimal
+    ROUND(SUM(
+        (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
+         FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) 
+        - h.inv_disc 
+        + (h.inv_ppn / 100 * (
             (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
-             FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) 
-            - h.inv_disc 
-            + (h.inv_ppn / 100 * (
-                (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
-                 FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc
-              ))
-            + h.inv_bkrm
-        ) AS todaySales,
-        -- Total Qty (Exclude Jasa & Custom Regex)
-        IFNULL(SUM(
-          (SELECT SUM(dd.invd_jumlah) FROM tinv_dtl dd 
-           WHERE dd.invd_inv_nomor = h.inv_nomor
-             AND dd.invd_kode NOT LIKE 'JASA%' 
-             AND dd.invd_kode NOT REGEXP ?) -- Placeholder ke-1
-        ), 0) AS todayQty
-      FROM tinv_hdr h
-      WHERE h.inv_sts_pro = 0 
-        AND h.inv_tanggal BETWEEN ? AND ? -- Placeholder ke-2 & 3
-        ${branchFilter};
-    `;
+             FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) - h.inv_disc
+          ))
+        + h.inv_bkrm
+        - COALESCE(h.inv_mp_biaya_platform, 0) -- WAJIB ADA: Pengurang biaya marketplace
+    )) AS todaySales,
+    
+    IFNULL(SUM(
+      (SELECT SUM(dd.invd_jumlah) FROM tinv_dtl dd 
+       WHERE dd.invd_inv_nomor = h.inv_nomor
+         AND dd.invd_kode NOT LIKE 'JASA%' 
+         AND dd.invd_kode NOT REGEXP ?)
+    ), 0) AS todayQty
+  FROM tinv_hdr h
+  WHERE h.inv_sts_pro = 0 
+    AND h.inv_tanggal BETWEEN ? AND ?
+    ${branchFilter};
+`;
 
     const [rows] = await pool.query(query, params);
     res.json({
