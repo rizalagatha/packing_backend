@@ -53,8 +53,22 @@ const getRealTimeStock = async (req, res) => {
     let params = [gudang];
     let searchFilter = "";
     if (search) {
-      searchFilter = `AND (a.brg_kode LIKE ? OR a.brg_jeniskaos LIKE ? OR a.brg_warna LIKE ?)`;
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      // TAMBAHKAN brg_tipe dan brg_lengan agar kata "Pendek" bisa terbaca
+      searchFilter = `AND (
+        a.brg_kode LIKE ? 
+        OR a.brg_jeniskaos LIKE ? 
+        OR a.brg_tipe LIKE ? 
+        OR a.brg_lengan LIKE ? 
+        OR a.brg_warna LIKE ?
+    )`;
+      const searchParam = `%${search}%`;
+      params.push(
+        searchParam,
+        searchParam,
+        searchParam,
+        searchParam,
+        searchParam
+      );
     }
 
     const query = `
@@ -76,7 +90,7 @@ const getRealTimeStock = async (req, res) => {
             GROUP BY a.brg_kode
             HAVING total_stok <> 0
             ORDER BY nama ASC
-            LIMIT 100;
+            LIMIT 500;
         `;
 
     const [rows] = await connection.query(query, params);
