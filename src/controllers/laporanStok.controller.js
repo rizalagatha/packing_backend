@@ -27,7 +27,7 @@ const getRealTimeStock = async (req, res) => {
       )`;
     }
 
-    // 2. Query Ukuran secara Dinamis (Ambil dari master ukuran agar kolom lengkap seperti di web)
+    // 2. Query Ukuran secara Dinamis (Master ukuran agar kolom lengkap seperti di web)
     const [sizes] = await connection.query(
       `SELECT DISTINCT brgd_ukuran AS mst_ukuran FROM tbarangdc_dtl ORDER BY brgd_ukuran`
     );
@@ -43,7 +43,7 @@ const getRealTimeStock = async (req, res) => {
       dynamicColumns = ", " + dynamicColumns;
     }
 
-    // 3. Siapkan Parameter & Pencarian
+    // 3. Siapkan Parameter Dasar
     let params = [tanggal];
     let gudangFilter = "1 = 1";
     if (gudang && gudang !== "ALL") {
@@ -51,27 +51,34 @@ const getRealTimeStock = async (req, res) => {
       params.push(gudang);
     }
 
+    // 4. LOGIKA PENCARIAN PINTAR (Multi-Word Search)
     let searchFilter = "";
     if (search) {
-      // FIX: Tambahkan Lengan & Tipe agar pencarian "Pendek/Panjang" ketemu
-      searchFilter = `AND (
-        a.brg_kode LIKE ? 
-        OR a.brg_jeniskaos LIKE ? 
-        OR a.brg_tipe LIKE ? 
-        OR a.brg_lengan LIKE ? 
-        OR a.brg_warna LIKE ?
-      )`;
-      const searchParam = `%${search}%`;
-      params.push(
-        searchParam,
-        searchParam,
-        searchParam,
-        searchParam,
-        searchParam
-      );
+      // Pecah string pencarian berdasarkan spasi (misal: "ko polos pendek" -> ["ko", "polos", "pendek"])
+      const words = search.trim().split(/\s+/);
+
+      // Buat blok AND untuk setiap kata
+      searchFilter = words
+        .map(() => {
+          return `AND (
+          a.brg_kode LIKE ? 
+          OR a.brg_jeniskaos LIKE ? 
+          OR a.brg_tipe LIKE ? 
+          OR a.brg_lengan LIKE ? 
+          OR a.brg_jeniskain LIKE ? 
+          OR a.brg_warna LIKE ?
+        )`;
+        })
+        .join(" ");
+
+      // Masukkan setiap kata ke dalam array parameter (sesuai jumlah placeholder ?)
+      words.forEach((word) => {
+        const p = `%${word}%`;
+        params.push(p, p, p, p, p, p); // 6 kolom per kata
+      });
     }
 
-    // 4. Query Utama
+    // 5. Query Utama
     const query = `
         SELECT
             a.brg_kode AS kode,
@@ -93,7 +100,7 @@ const getRealTimeStock = async (req, res) => {
         GROUP BY a.brg_kode, nama
         ${!isShowZero ? "HAVING total_stok > 0" : ""}
         ORDER BY nama ASC
-        LIMIT 500; -- Tingkatkan limit agar data selengkap di web
+        LIMIT 500;
     `;
 
     const [rows] = await connection.query(query, params);
