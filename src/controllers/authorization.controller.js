@@ -4,53 +4,54 @@ const pool = require("../config/database");
 const getPendingRequests = async (req, res) => {
   try {
     const user = req.user;
+    const userKodeUpper = String(user.kode).toUpperCase();
+    const today = new Date();
+
+    // Periode Pengalihan: 12 Jan s/d 16 Jan 2026
+    const isEstuManagerPeriod =
+      today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
+
     let query = "";
     let params = [];
 
-    // --- PERBAIKAN LOGIKA SQL DI SINI ---
-
     if (user.cabang === "KDC") {
-      // 1. LOGIKA MANAGER (KDC):
-      // Hanya melihat request yang bersifat UMUM (Internal) atau TARGETNYA KDC.
-      // Jangan tampilkan request yang ditujukan khusus ke Toko lain (o_target = 'K01', dll).
-      query = `
-        SELECT * FROM totorisasi 
-        WHERE o_status = 'P' 
-          AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC')
-        ORDER BY o_created DESC
-      `;
+      // --- LOGIKA FILTER UNTUK USER PUSAT ---
+
+      if (userKodeUpper === "ESTU") {
+        if (isEstuManagerPeriod) {
+          // 12-16 JAN: Estu lihat SEMUA (Manager + Peminjaman)
+          query = `SELECT * FROM totorisasi WHERE o_status = 'P' 
+                   AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis = 'PEMINJAMAN_BARANG')`;
+        } else {
+          // NORMAL: Estu HANYA boleh lihat Peminjaman Barang
+          query = `SELECT * FROM totorisasi WHERE o_status = 'P' AND o_jenis = 'PEMINJAMAN_BARANG'`;
+        }
+      } else if (userKodeUpper === "HARIS") {
+        if (isEstuManagerPeriod) {
+          // 12-16 JAN: Haris tidak melihat apa-apa (Menu kosong)
+          query = `SELECT * FROM totorisasi WHERE 1=0`;
+        } else {
+          // NORMAL: Haris lihat semua transaksi Manager
+          query = `SELECT * FROM totorisasi WHERE o_status = 'P' 
+                   AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC')`;
+        }
+      } else {
+        // User lain (misal DARUL): Tetap lihat semua transaksi Manager
+        query = `SELECT * FROM totorisasi WHERE o_status = 'P' 
+                 AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis = 'PEMINJAMAN_BARANG')`;
+      }
     } else {
-      // 2. LOGIKA USER TOKO (K01, dll):
-      // Melihat request jika:
-      // A. Request DITUJUKAN ke saya (o_target = 'K01') -> Kasus Ambil Barang
-      // B. Request DIBUAT oleh saya (o_cab = 'K01') -> Kasus Otorisasi Internal
-      query = `
-        SELECT * FROM totorisasi 
-        WHERE o_status = 'P' 
-          AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))
-        ORDER BY o_created DESC
-      `;
-      // Kita perlu push user.cabang dua kali untuk mengisi dua tanda tanya (?) di atas
+      // Logika User Toko tetap sama seperti sebelumnya
+      query = `SELECT * FROM totorisasi WHERE o_status = 'P' 
+               AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))`;
       params.push(user.cabang, user.cabang);
     }
 
-    // Debugging (Opsional: Cek di terminal backend)
-    // console.log("User:", user.kode, "Cabang:", user.cabang);
-    // console.log("Query:", query);
-    // console.log("Params:", params);
-
     const [rows] = await pool.query(query, params);
-
-    res.status(200).json({
-      success: true,
-      data: rows || [],
-    });
+    res.status(200).json({ success: true, data: rows || [] });
   } catch (error) {
     console.error("Error getPendingRequests:", error);
-    res.status(500).json({
-      success: false,
-      message: "Gagal memuat data otorisasi.",
-    });
+    res.status(500).json({ success: false, message: "Gagal memuat data." });
   }
 };
 
