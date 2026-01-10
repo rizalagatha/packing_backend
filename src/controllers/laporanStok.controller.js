@@ -6,15 +6,12 @@ const { format } = require("date-fns");
  * Dioptimalkan untuk Mobile dengan filter pencarian
  */
 const getRealTimeStock = async (req, res) => {
+  const { gudang, search, jenisStok, tampilkanKosong, tanggal } = req.query;
   const connection = await pool.getConnection();
-  try {
-    const { gudang, search, jenisStok = "semua" } = req.query;
 
-    if (!gudang) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Gudang harus dipilih." });
-    }
+  try {
+    // Konversi string ke boolean dari query params
+    const isShowZero = String(tampilkanKosong) === "true";
 
     // 1. Tentukan Sumber Tabel
     let stockSourceTable = "";
@@ -24,19 +21,16 @@ const getRealTimeStock = async (req, res) => {
       stockSourceTable = "tmasterstokso";
     } else {
       stockSourceTable = `(
-                SELECT mst_brg_kode, mst_ukuran, mst_stok_in, mst_stok_out, mst_cab, mst_tanggal, mst_aktif FROM tmasterstok
-                UNION ALL
-                SELECT mst_brg_kode, mst_ukuran, mst_stok_in, mst_stok_out, mst_cab, mst_tanggal, mst_aktif FROM tmasterstokso
-            )`;
+        SELECT mst_brg_kode, mst_ukuran, mst_stok_in, mst_stok_out, mst_cab, mst_tanggal, mst_aktif FROM tmasterstok
+        UNION ALL
+        SELECT mst_brg_kode, mst_ukuran, mst_stok_in, mst_stok_out, mst_cab, mst_tanggal, mst_aktif FROM tmasterstokso
+      )`;
     }
 
-    // 2. Query Ambil Ukuran secara dinamis untuk kolom (Pivot)
-    const [sizes] = await connection.query(`
-            SELECT DISTINCT mst_ukuran FROM ${
-              jenisStok === "semua" ? "tmasterstok" : stockSourceTable
-            } 
-            WHERE mst_aktif = 'Y' ORDER BY mst_ukuran
-        `);
+    // 2. Query Ukuran secara Dinamis (Ambil dari master ukuran agar kolom lengkap seperti di web)
+    const [sizes] = await connection.query(
+      `SELECT DISTINCT brgd_ukuran AS mst_ukuran FROM tbarangdc_dtl ORDER BY brgd_ukuran`
+    );
 
     let dynamicColumns = "";
     if (sizes.length > 0) {
@@ -49,18 +43,24 @@ const getRealTimeStock = async (req, res) => {
       dynamicColumns = ", " + dynamicColumns;
     }
 
-    // 3. Query Utama
-    let params = [gudang];
+    // 3. Siapkan Parameter & Pencarian
+    let params = [tanggal];
+    let gudangFilter = "1 = 1";
+    if (gudang && gudang !== "ALL") {
+      gudangFilter = `m.mst_cab = ?`;
+      params.push(gudang);
+    }
+
     let searchFilter = "";
     if (search) {
-      // TAMBAHKAN brg_tipe dan brg_lengan agar kata "Pendek" bisa terbaca
+      // FIX: Tambahkan Lengan & Tipe agar pencarian "Pendek/Panjang" ketemu
       searchFilter = `AND (
         a.brg_kode LIKE ? 
         OR a.brg_jeniskaos LIKE ? 
         OR a.brg_tipe LIKE ? 
         OR a.brg_lengan LIKE ? 
         OR a.brg_warna LIKE ?
-    )`;
+      )`;
       const searchParam = `%${search}%`;
       params.push(
         searchParam,
@@ -71,27 +71,30 @@ const getRealTimeStock = async (req, res) => {
       );
     }
 
+    // 4. Query Utama
     const query = `
+        SELECT
+            a.brg_kode AS kode,
+            TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna)) AS nama
+            ${dynamicColumns}
+            , SUM(IFNULL(s.stok, 0)) AS total_stok
+            , IFNULL((SELECT SUM(brgd_min) FROM tbarangdc_dtl b WHERE b.brgd_kode = a.brg_kode), 0) AS Buffer
+        FROM tbarangdc a
+        LEFT JOIN (
             SELECT 
-                a.brg_kode AS kode,
-                TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna)) AS nama,
-                SUM(IFNULL(s.stok, 0)) AS total_stok
-                ${dynamicColumns}
-            FROM tbarangdc a
-            LEFT JOIN (
-                SELECT 
-                    m.mst_brg_kode, m.mst_ukuran,
-                    SUM(m.mst_stok_in - m.mst_stok_out) as stok
-                FROM ${stockSourceTable} m
-                WHERE m.mst_aktif = 'Y' AND m.mst_cab = ?
-                GROUP BY m.mst_brg_kode, m.mst_ukuran
-            ) s ON a.brg_kode = s.mst_brg_kode
-            WHERE a.brg_aktif = 0 AND a.brg_logstok = 'Y' ${searchFilter}
-            GROUP BY a.brg_kode
-            HAVING total_stok <> 0
-            ORDER BY nama ASC
-            LIMIT 500;
-        `;
+                m.mst_brg_kode, 
+                m.mst_ukuran, 
+                SUM(m.mst_stok_in - m.mst_stok_out) as stok
+            FROM ${stockSourceTable} m
+            WHERE m.mst_aktif = 'Y' AND m.mst_tanggal <= ? AND ${gudangFilter}
+            GROUP BY m.mst_brg_kode, m.mst_ukuran
+        ) s ON a.brg_kode = s.mst_brg_kode
+        WHERE a.brg_aktif = 0 AND a.brg_logstok = 'Y' ${searchFilter}
+        GROUP BY a.brg_kode, nama
+        ${!isShowZero ? "HAVING total_stok > 0" : ""}
+        ORDER BY nama ASC
+        LIMIT 500; -- Tingkatkan limit agar data selengkap di web
+    `;
 
     const [rows] = await connection.query(query, params);
     res.json({
@@ -100,7 +103,7 @@ const getRealTimeStock = async (req, res) => {
       sizes: sizes.map((s) => s.mst_ukuran),
     });
   } catch (error) {
-    console.error(error);
+    console.error("Error RealTimeStock:", error);
     res.status(500).json({ success: false, message: "Gagal memuat stok." });
   } finally {
     connection.release();
