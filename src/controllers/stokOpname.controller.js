@@ -63,9 +63,14 @@ const downloadMasterBarang = async (req, res) => {
 
 // 2. Upload Hasil (Integrasi ke tabel thitungstok)
 const uploadHasilOpname = async (req, res) => {
-  console.log(">>> REQUEST UPLOAD MASUK"); // Tambahkan ini
+  // PAKSA LOG DI BARIS PALING ATAS
+  console.log("========================================");
+  console.log("DEBUG: Request Upload Opname Diterima!");
+  console.log("Diterima dari Operator:", req.body.operatorName);
+  console.log("Jumlah Item:", req.body.items ? req.body.items.length : 0);
+  console.log("========================================");
+
   const { items, targetCabang, deviceInfo, operatorName } = req.body;
-  console.log(">>> JUMLAH ITEMS:", items?.length); // Dan ini
   const user = req.user;
   const cabangTujuan = targetCabang || user.cabang;
 
