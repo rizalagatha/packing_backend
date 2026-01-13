@@ -63,7 +63,9 @@ const downloadMasterBarang = async (req, res) => {
 
 // 2. Upload Hasil (Integrasi ke tabel thitungstok)
 const uploadHasilOpname = async (req, res) => {
+  console.log(">>> REQUEST UPLOAD MASUK"); // Tambahkan ini
   const { items, targetCabang, deviceInfo, operatorName } = req.body;
+  console.log(">>> JUMLAH ITEMS:", items?.length); // Dan ini
   const user = req.user;
   const cabangTujuan = targetCabang || user.cabang;
 

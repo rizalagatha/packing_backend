@@ -15,8 +15,8 @@ const app = express();
 
 // 4. Pengaturan Middleware
 app.use(cors()); // Mengizinkan akses dari domain lain (Cross-Origin Resource Sharing)
-app.use(express.json()); // Mengizinkan server membaca body request dalam format JSON
-app.use(express.urlencoded({ extended: true })); // Mengizinkan server membaca body dari form HTML
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // 5. Rute Dasar (untuk tes)
 app.get("/", (req, res) => {
@@ -94,6 +94,13 @@ app.use("/api/ambil-barang-form", ambilBarangRoutes);
 
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
+app.use((err, req, res, next) => {
+  console.error("❌ Global Error Handler:", err.message);
+  res.status(500).json({
+    success: false,
+    message: "Terjadi kesalahan pada server: " + err.message,
+  });
+});
 app.listen(PORT, () => {
   console.log(`🚀 Server berjalan di http://localhost:${PORT}`);
 });
