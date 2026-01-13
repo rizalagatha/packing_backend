@@ -63,14 +63,17 @@ const downloadMasterBarang = async (req, res) => {
 
 // 2. Upload Hasil (Integrasi ke tabel thitungstok)
 const uploadHasilOpname = async (req, res) => {
-  // PAKSA LOG DI BARIS PALING ATAS
+  const { items, targetCabang, deviceInfo, operatorName } = req.body;
+
+  // HITUNG TOTAL PCS UNTUK LOG
+  const totalPcs = items.reduce((sum, i) => sum + Number(i.qty_fisik || 0), 0);
+
   console.log("========================================");
   console.log("DEBUG: Request Upload Opname Diterima!");
-  console.log("Diterima dari Operator:", req.body.operatorName);
-  console.log("Jumlah Item:", req.body.items ? req.body.items.length : 0);
+  console.log("Diterima dari Operator:", operatorName);
+  console.log("Jumlah SKU (Baris):", items ? items.length : 0);
+  console.log("Total Qty (Pcs):", totalPcs); // <--- Sekarang angka 40 akan muncul di sini
   console.log("========================================");
-
-  const { items, targetCabang, deviceInfo, operatorName } = req.body;
   const user = req.user;
   const cabangTujuan = targetCabang || user.cabang;
 
