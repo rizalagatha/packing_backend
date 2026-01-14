@@ -135,66 +135,84 @@ const savePenjualan = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    // Validasi Customer
-    // Fallback: Jika header.customer.kode tidak ada, coba cek properti lain
+    // 1. Validasi Customer
     const customerKode = header.customer?.kode || header.customer?.cus_kode;
     if (!customerKode) {
-      throw new Error(
-        "Data customer tidak valid (Kode kosong). Silakan reload halaman."
+      throw new Error("Data customer tidak valid (Kode kosong).");
+    }
+
+    // 2. Inisialisasi Nomor dan ID
+    const invNomor = await generateNewInvNumber(user.cabang, header.tanggal);
+    const idrec =
+      header.idrec ||
+      `${user.cabang}INV${format(new Date(), "yyyyMMddHHmmssSSS")}`;
+    const piutangNomor = `${customerKode}${invNomor}`;
+
+    // 3. Perhitungan Nominal (Mengikuti Logika Web)
+    const subTotal = applyRounding(totals.subTotal);
+    const totalDiskonFaktur = applyRounding(totals.totalDiskonFaktur || 0);
+    const biayaKirim = applyRounding(header.biayaKirim || 0);
+    const grandTotal = applyRounding(totals.grandTotal);
+
+    const pundiAmal = Number(payment.pundiAmal || 0);
+    const bayarTunai = Number(payment.tunai || 0);
+    const bayarTransfer = Number(payment.transfer?.nominal || 0);
+
+    // Hitung Kembalian Total sebelum Pundi Amal
+    const totalBayarInput = bayarTunai + bayarTransfer;
+    const kembalianTotal = Math.max(totalBayarInput - grandTotal, 0);
+
+    // inv_rptunai (Tunai Bersih) = Tunai yang dibayarkan dikurangi kembalian (seperti di web)
+    const bayarTunaiBersih = Math.max(bayarTunai - kembalianTotal, 0);
+
+    // inv_kembali (Kembalian Final) = Kembalian setelah dipotong pundi amal
+    const kembalianFinal = Math.max(kembalianTotal - pundiAmal, 0);
+
+    // 4. Generate Nomor Setoran jika ada Transfer
+    let nomorSetoran = "";
+    if (bayarTransfer > 0) {
+      nomorSetoran = await generateNewSetorNumber(
+        connection,
+        user.cabang,
+        header.tanggal
       );
     }
 
-    const invNomor = await generateNewInvNumber(user.cabang, header.tanggal);
-    const idrec = `${user.cabang}INV${format(new Date(), "yyyyMMddHHmmssSSS")}`;
-    const piutangNomor = `${customerKode}${invNomor}`;
+    // 5. INSERT tinv_hdr
+    const headerSql = `
+      INSERT INTO tinv_hdr (
+        inv_idrec, inv_nomor, inv_tanggal, inv_cab, 
+        inv_cus_kode, inv_cus_level, inv_ket, inv_sc,
+        inv_disc, inv_bkrm, inv_dp, inv_bayar, inv_pundiamal,
+        inv_rptunai, inv_rpcard, inv_nosetor, inv_novoucher, inv_rpvoucher, 
+        inv_kembali, user_create, date_create
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, '', 0, ?, ?, NOW())`;
 
-    const subTotal = applyRounding(totals.subTotal);
-    const totalDiskon = applyRounding(totals.totalDiskonFaktur || 0);
-    const grandTotal = applyRounding(totals.grandTotal);
+    await connection.query(headerSql, [
+      idrec,
+      invNomor,
+      toSqlDate(header.tanggal),
+      user.cabang,
+      customerKode,
+      header.customer.level_kode || "1",
+      header.keterangan || "Penjualan Mobile",
+      user.kode,
+      totalDiskonFaktur,
+      biayaKirim,
+      totalBayarInput, // inv_bayar (Total uang masuk)
+      pundiAmal,
+      bayarTunaiBersih, // inv_rptunai (Tunai Bersih)
+      bayarTransfer, // inv_rpcard
+      nomorSetoran, // inv_nosetor
+      kembalianFinal, // inv_kembali
+      user.kode,
+    ]);
 
-    const bayarTunai = applyRounding(Number(payment.tunai || 0));
-    const bayarTransfer = applyRounding(Number(payment.transfer?.nominal || 0));
-    const totalBayar = bayarTunai + bayarTransfer;
-
-    const kembalian = Math.max(totalBayar - grandTotal, 0);
-    const sisaPiutang = Math.max(grandTotal - totalBayar, 0);
-
-    // --- Insert tinv_hdr ---
-    await connection.query(
-      `INSERT INTO tinv_hdr (
-                inv_idrec, inv_nomor, inv_tanggal, inv_cab, 
-                inv_cus_kode, inv_cus_level, inv_ket, inv_sc,
-                inv_disc, inv_bkrm, inv_dp, inv_bayar, inv_pundiamal,
-                inv_rptunai, inv_rpcard, inv_novoucher, inv_rpvoucher, 
-                inv_kembali, user_create, date_create
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, '', 0, ?, ?, NOW())`,
-      [
-        idrec,
-        invNomor,
-        toSqlDate(header.tanggal),
-        user.cabang,
-        customerKode,
-        header.customer.level_kode || "1",
-        header.keterangan || "Penjualan Mobile",
-        user.kode,
-        totalDiskon,
-        0,
-        totalBayar,
-        bayarTunai,
-        bayarTransfer,
-        kembalian,
-        user.kode,
-      ]
-    );
-
-    // --- Insert tinv_dtl ---
+    // 6. INSERT tinv_dtl
     const detailValues = items.map((item, index) => {
       const invdIdrec = `${invNomor.replace(/\./g, "")}${String(
         index + 1
       ).padStart(3, "0")}`;
-      const harga = Number(item.harga);
-      const diskonRp = Number(item.diskonRp || 0);
-
       return [
         invdIdrec,
         invNomor,
@@ -203,10 +221,10 @@ const savePenjualan = async (req, res) => {
         item.jumlah,
         0,
         item.jumlah,
-        harga,
+        Number(item.harga),
         0,
         0,
-        diskonRp,
+        Number(item.diskonRp || 0),
         "",
         index + 1,
       ];
@@ -219,22 +237,25 @@ const savePenjualan = async (req, res) => {
       );
     }
 
-    // --- Insert tpiutang ---
-    if (grandTotal > 0) {
-      await connection.query(
-        `INSERT INTO tpiutang_hdr (ph_nomor, ph_tanggal, ph_cus_kode, ph_inv_nomor, ph_top, ph_nominal) VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          piutangNomor,
-          toSqlDate(header.tanggal),
-          customerKode,
-          invNomor,
-          0,
-          sisaPiutang,
-        ]
-      );
+    // 7. LOGIKA PIUTANG (tpiutang_hdr & tpiutang_dtl)
+    // Nominal Header Piutang = Total Invoice (Bottom-up)
+    await connection.query(
+      `INSERT INTO tpiutang_hdr (ph_nomor, ph_tanggal, ph_cus_kode, ph_inv_nomor, ph_top, ph_nominal, ph_cab) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        piutangNomor,
+        toSqlDate(header.tanggal),
+        customerKode,
+        invNomor,
+        0,
+        grandTotal,
+        user.cabang,
+      ]
+    );
 
-      // Detail Tagihan
-      const dtlTagihan = [
+    // Detail Debet: Penjualan
+    await connection.query(
+      `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
         `${user.cabang}INV${format(new Date(), "yyyyMMddHHmmssSSS")}`,
         piutangNomor,
         toSqlDateTime(header.tanggal),
@@ -242,93 +263,91 @@ const savePenjualan = async (req, res) => {
         grandTotal,
         0,
         "",
-      ];
-      await connection.query(
-        `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?)`,
-        [dtlTagihan]
-      );
+      ]
+    );
 
-      if (bayarTunai > 0) {
-        const tunaiBersih = Math.max(bayarTunai - kembalian, 0);
-        const dtlTunai = [
+    // Detail Kredit: Pembayaran Tunai (Bersih)
+    if (bayarTunaiBersih > 0) {
+      await connection.query(
+        `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
           `${user.cabang}CASH${format(new Date(), "yyyyMMddHHmmssSSS")}`,
           piutangNomor,
           toSqlDateTime(header.tanggal),
           "Bayar Tunai",
           0,
-          tunaiBersih,
+          bayarTunaiBersih,
           "",
-        ];
-        await connection.query(
-          `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?)`,
-          [dtlTunai]
-        );
-      }
+        ]
+      );
+    }
 
-      if (bayarTransfer > 0) {
-        const dtlTransfer = [
+    // Detail Kredit: Pembayaran Transfer
+    if (bayarTransfer > 0) {
+      await connection.query(
+        `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
           `${user.cabang}TRF${format(new Date(), "yyyyMMddHHmmssSSS")}`,
           piutangNomor,
           toSqlDateTime(header.tanggal),
           "Bayar Transfer",
           0,
           bayarTransfer,
-          "",
-        ];
-        await connection.query(
-          `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?)`,
-          [dtlTransfer]
-        );
-      }
+          nomorSetoran,
+        ]
+      );
     }
 
-    // --- Insert tsetor (Jika Transfer) ---
+    // 8. INSERT tsetor (Jika Transfer) - Menyimpan Akun dan Rekening
     if (bayarTransfer > 0) {
-      const nomorSetor = await generateNewSetorNumber(
-        connection,
-        user.cabang,
-        header.tanggal
-      );
+      const idrecSetor = `${user.cabang}SH${format(
+        new Date(),
+        "yyyyMMddHHmmssSSS"
+      )}`;
 
-      const timestampSetor = format(new Date(), "yyyyMMddHHmmssSSS");
-      const idrecSetor = `${user.cabang}SH${timestampSetor}`; // ID Unik Header
-      const idrecSetorDtl = `${user.cabang}SD${timestampSetor}`; // ID Unik Detail
-      const angsurId = `${user.cabang}KS${timestampSetor}`; // ID Angsur (Penting untuk relasi)
+      // Ambil info bank dari payment.transfer.akun
+      const kodeBank = payment.transfer?.akun?.kode || "";
+      const norekBank = payment.transfer?.akun?.rekening || "";
 
-      // Header Setoran
       await connection.query(
-        `INSERT INTO tsetor_hdr (sh_idrec, sh_nomor, sh_cus_kode, sh_tanggal, sh_jenis, sh_nominal, sh_otomatis, user_create, date_create) VALUES (?, ?, ?, ?, 1, ?, 'Y', ?, NOW())`,
+        `INSERT INTO tsetor_hdr (
+          sh_idrec, sh_nomor, sh_cus_kode, sh_tanggal, sh_jenis, 
+          sh_nominal, sh_akun, sh_norek, sh_tgltransfer, sh_otomatis, user_create, date_create
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 'Y', ?, NOW())`,
         [
           idrecSetor,
-          nomorSetor,
+          nomorSetoran,
           customerKode,
           toSqlDateTime(header.tanggal),
           bayarTransfer,
+          kodeBank,
+          norekBank,
+          toSqlDateTime(header.tanggal),
           user.kode,
         ]
       );
 
-      // Detail Setoran
-      // --- PERBAIKAN 2: Tambahkan 'sd_angsur' dan gunakan 'idrecSetorDtl' ---
       await connection.query(
         `INSERT INTO tsetor_dtl (sd_idrec, sd_sh_nomor, sd_tanggal, sd_inv, sd_bayar, sd_ket, sd_angsur, sd_nourut) VALUES (?, ?, ?, ?, ?, 'PEMBAYARAN DARI KASIR MOBILE', ?, 1)`,
         [
-          idrecSetorDtl, // ID Unik baris detail
-          nomorSetor,
+          `${user.cabang}SD${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+          nomorSetoran,
           toSqlDateTime(header.tanggal),
           invNomor,
           bayarTransfer,
-          angsurId, // ID Angsur (mengisi kekosongan yang menyebabkan duplicate entry '')
+          `${user.cabang}KS${format(new Date(), "yyyyMMddHHmmssSSS")}`,
         ]
       );
     }
 
     await connection.commit();
-    res.status(201).json({
-      success: true,
-      message: `Penjualan ${invNomor} berhasil.`,
-      data: { nomor: invNomor },
-    });
+    res
+      .status(201)
+      .json({
+        success: true,
+        message: `Penjualan ${invNomor} berhasil.`,
+        data: { nomor: invNomor },
+      });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error savePenjualan:", error);
