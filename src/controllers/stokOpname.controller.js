@@ -29,29 +29,23 @@ const getCabangList = async (req, res) => {
 // 1. Download Master (Revisi: Terima parameter cabang)
 const downloadMasterBarang = async (req, res) => {
   try {
-    const targetCabang = req.query.cabang || req.user.cabang;
-
-    // REVISI: Hapus filter brg_aktif dan brg_logstok agar SAMA PERSIS dengan Delphi.
-    // Kita hanya butuh Barcode, Kode, Nama, Ukuran.
-
     const query = `
-            SELECT 
-                TRIM(d.brgd_barcode) AS barcode,
-                d.brgd_kode AS kode,
-                TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
-                d.brgd_ukuran AS ukuran,
-                '' AS lokasi,
-                0 AS stok_sistem -- Kita set 0 saja agar query lebih ringan, toh ini blind count
-            FROM tbarangdc_dtl d
-            JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
-            -- HAPUS WHERE h.brg_aktif... AGAR SEMUA BARANG KEDOWNLOAD
-            ORDER BY d.brgd_barcode ASC; 
-        `;
+      SELECT 
+        -- Jika barcode di detail kosong, gunakan kode barang sebagai barcode
+        TRIM(IFNULL(d.brgd_barcode, h.brg_kode)) AS barcode,
+        h.brg_kode AS kode,
+        TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
+        IFNULL(d.brgd_ukuran, '') AS ukuran,
+        '' AS lokasi,
+        0 AS stok_sistem
+      FROM tbarangdc h
+      -- Gunakan LEFT JOIN agar barang tetap muncul meski tidak ada di detail barcode
+      LEFT JOIN tbarangdc_dtl d ON h.brg_kode = d.brgd_kode
+      -- Pastikan TIDAK ADA filter WHERE brg_aktif = '1' di sini
+      ORDER BY barcode ASC;
+    `;
 
-    // Eksekusi tanpa parameter (karena kita hapus filter stok/cabang di query master)
-    // Master barang biasanya berlaku global untuk semua cabang kan?
     const [rows] = await pool.query(query);
-
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
     console.error("Error downloadMasterBarang:", error);
