@@ -131,8 +131,8 @@ const checkStatus = async (req, res) => {
         data.o_status === "Y"
           ? "ACC"
           : data.o_status === "N"
-          ? "TOLAK"
-          : "WAIT",
+            ? "TOLAK"
+            : "WAIT",
       approver: data.o_approver,
     });
   } catch (error) {
@@ -162,6 +162,10 @@ const getPendingRequests = async (req, res) => {
         query += isEstuManagerPeriod
           ? "AND 1=0"
           : "AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC')";
+      } else if (userKodeUpper === "RIO") {
+        // --- TAMBAHKAN INI ---
+        // Rio di KDC hanya boleh melihat TRANSFER_SOP
+        query += "AND o_jenis = 'TRANSFER_SOP'";
       } else {
         query +=
           "AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis = 'PEMINJAMAN_BARANG')";
@@ -196,7 +200,7 @@ const processRequest = async (req, res) => {
     // 1. AMBIL DETAIL JENIS REQUEST DULU
     const [checkRows] = await pool.query(
       "SELECT o_jenis FROM totorisasi WHERE o_nomor = ?",
-      [authNomor]
+      [authNomor],
     );
 
     if (checkRows.length === 0) {
@@ -238,6 +242,22 @@ const processRequest = async (req, res) => {
             "Anda hanya berwenang untuk otorisasi Peminjaman Barang di luar periode 12-16 Jan.",
         });
       }
+    }
+
+    // C. Proteksi RIO & Transfer SOP
+    if (o_jenis === "TRANSFER_SOP" && userKodeUpper !== "RIO") {
+      return res.status(403).json({
+        success: false,
+        message: "Otorisasi Transfer SOP hanya boleh dilakukan oleh RIO.",
+      });
+    }
+
+    // Tambahan: Pastikan Rio tidak bisa approve yang bukan haknya
+    if (userKodeUpper === "RIO" && o_jenis !== "TRANSFER_SOP") {
+      return res.status(403).json({
+        success: false,
+        message: "Anda hanya berwenang untuk otorisasi Transfer SOP.",
+      });
     }
 
     // 3. EKSEKUSI UPDATE KE DATABASE
