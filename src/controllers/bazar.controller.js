@@ -1,4 +1,4 @@
-const pool = require("../config/db"); // Sesuaikan dengan path database pool Abang
+const pool = require("../config/database");
 
 const downloadMasterBazar = async (req, res) => {
   try {
