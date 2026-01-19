@@ -1,10 +1,10 @@
 // 1. Impor library yang dibutuhkan
-if (process.env.NODE_ENV !== 'production') {
-  require('dotenv').config();
+if (process.env.NODE_ENV !== "production") {
+  require("dotenv").config();
 }
 const express = require("express");
 const cors = require("cors");
-const whatsappService = require('./src/services/whatsapp.service');
+const whatsappService = require("./src/services/whatsapp.service");
 
 // 2. Inisialisasi koneksi database
 // Cukup dengan memanggil file ini, koneksi akan dibuat dan diuji
@@ -47,32 +47,32 @@ app.use("/api/terima-sj", terimaSjRoutes);
 const returAdminRoutes = require("./src/routes/returAdmin.routes.js");
 app.use("/api/retur-admin", returAdminRoutes);
 
-const spkRoutes = require('./src/routes/spk.routes.js');
-app.use('/api/spk', spkRoutes);
+const spkRoutes = require("./src/routes/spk.routes.js");
+app.use("/api/spk", spkRoutes);
 
-const whatsappRoutes = require('./src/routes/whatsapp.routes.js');
-app.use('/api/whatsapp', whatsappRoutes);
+const whatsappRoutes = require("./src/routes/whatsapp.routes.js");
+app.use("/api/whatsapp", whatsappRoutes);
 
-const checkerRoutes = require('./src/routes/checker.routes.js');
-app.use('/api/checker', checkerRoutes);
+const checkerRoutes = require("./src/routes/checker.routes.js");
+app.use("/api/checker", checkerRoutes);
 
-const mutasiStoreRoutes = require('./src/routes/mutasiStore.routes.js');
-app.use('/api/mutasi-store', mutasiStoreRoutes);
+const mutasiStoreRoutes = require("./src/routes/mutasiStore.routes.js");
+app.use("/api/mutasi-store", mutasiStoreRoutes);
 
-const mutasiTerimaRoutes = require('./src/routes/mutasiTerima.routes.js');
-app.use('/api/mutasi-terima', mutasiTerimaRoutes);
+const mutasiTerimaRoutes = require("./src/routes/mutasiTerima.routes.js");
+app.use("/api/mutasi-terima", mutasiTerimaRoutes);
 
-const stockRoutes = require('./src/routes/stock.routes.js');
-app.use('/api/stock', stockRoutes);
+const stockRoutes = require("./src/routes/stock.routes.js");
+app.use("/api/stock", stockRoutes);
 
-const mintaBarangRoutes = require('./src/routes/mintaBarang.routes.js');
-app.use('/api/minta-barang', mintaBarangRoutes);
+const mintaBarangRoutes = require("./src/routes/mintaBarang.routes.js");
+app.use("/api/minta-barang", mintaBarangRoutes);
 
-const penjualanRoutes = require('./src/routes/penjualan.routes.js');
-app.use('/api/penjualan', penjualanRoutes);
+const penjualanRoutes = require("./src/routes/penjualan.routes.js");
+app.use("/api/penjualan", penjualanRoutes);
 
-const invoiceRoutes = require('./src/routes/invoice.routes.js');
-app.use('/api/invoices', invoiceRoutes);
+const invoiceRoutes = require("./src/routes/invoice.routes.js");
+app.use("/api/invoices", invoiceRoutes);
 
 const stokOpnameRoutes = require("./src/routes/stokOpname.routes.js");
 app.use("/api/stok-opname", stokOpnameRoutes);
@@ -83,7 +83,7 @@ app.use("/api/dashboard", dashboardRoutes);
 const packingListRoutes = require("./src/routes/packingList.routes"); // <--- Import
 app.use("/api/packing-list-form", packingListRoutes); // <--- Daftarkan
 
-const authorizationRoutes = require('./src/routes/authorization.routes.js');
+const authorizationRoutes = require("./src/routes/authorization.routes.js");
 app.use("/api/authorization", authorizationRoutes);
 
 const laporanStokRoutes = require("./src/routes/laporanStok.routes.js");
@@ -91,6 +91,9 @@ app.use("/api/laporan-stok", laporanStokRoutes);
 
 const ambilBarangRoutes = require("./src/routes/ambilBarang.routes.js");
 app.use("/api/ambil-barang-form", ambilBarangRoutes);
+
+const bazarRoutes = require("./src/routes/bazar.routes");
+app.use("/api/bazar", bazarRoutes);
 
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
