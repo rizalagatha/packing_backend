@@ -11,7 +11,7 @@ const getCabangList = async (req, res) => {
       FROM tgudang
       WHERE gdg_dc IN (0, 1)
       ORDER BY gdg_kode
-      `
+      `,
     );
 
     res.status(200).json({
@@ -52,6 +52,43 @@ const downloadMasterBarang = async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Gagal mendownload data barang." });
+  }
+};
+
+const downloadMasterLokasi = async (req, res) => {
+  try {
+    const { cabang } = req.query; // Ambil parameter cabang dari query string
+
+    if (!cabang) {
+      return res.status(400).json({
+        success: false,
+        message: "Parameter cabang harus diisi.",
+      });
+    }
+
+    const query = `
+      SELECT 
+        lo_idrec, 
+        lo_cab, 
+        lo_lokasi, 
+        lo_jenis_nama 
+      FROM tlokasi_opname 
+      WHERE lo_cab = ?
+      ORDER BY lo_lokasi ASC
+    `;
+
+    const [rows] = await pool.query(query, [cabang]);
+
+    res.status(200).json({
+      success: true,
+      data: rows,
+    });
+  } catch (error) {
+    console.error("Error downloadMasterLokasi:", error);
+    res.status(500).json({
+      success: false,
+      message: "Gagal mendownload data master lokasi.",
+    });
   }
 };
 
@@ -122,4 +159,9 @@ const uploadHasilOpname = async (req, res) => {
   }
 };
 
-module.exports = { getCabangList, downloadMasterBarang, uploadHasilOpname };
+module.exports = {
+  getCabangList,
+  downloadMasterBarang,
+  downloadMasterLokasi,
+  uploadHasilOpname,
+};
