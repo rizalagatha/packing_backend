@@ -16,7 +16,8 @@ const downloadMasterBazar = async (req, res) => {
         )) AS nama,
         IFNULL(d.brgd_ukuran, '') AS ukuran,
         IFNULL(d.brgd_harga, 0) AS harga_jual,
-        IFNULL(h.brg_ktg, '') AS kategori
+        IFNULL(h.brg_ktg, '') AS kategori,
+        IFNULL(h.brg_ktgp, '') AS tipe_produk
       FROM tbarangdc_dtl d
       LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
       ORDER BY d.brgd_barcode ASC;
