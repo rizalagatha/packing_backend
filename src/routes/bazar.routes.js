@@ -14,5 +14,10 @@ router.post(
   authenticateToken,
   bazarController.uploadKoreksiBazar,
 );
+router.post(
+  "/upload-sales",
+  authenticateToken,
+  bazarController.uploadBazarSales,
+);
 
 module.exports = router;

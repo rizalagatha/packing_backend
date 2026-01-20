@@ -107,8 +107,68 @@ const uploadKoreksiBazar = async (req, res) => {
   }
 };
 
+const uploadBazarSales = async (req, res) => {
+  const { sales, targetCabang } = req.body; 
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    for (const nota of sales) {
+      const { header, details } = nota;
+      
+      // 1. Simpan Header (tso_hdr)
+      await connection.query(
+        `INSERT INTO tso_hdr (so_nomor, so_tanggal, so_customer, so_total, so_bayar, so_cash, so_card, so_voucher, so_kembali, so_bank_card, so_user_kasir, date_create) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [
+          header.so_nomor,
+          header.so_tanggal,
+          header.so_customer,
+          header.so_total,
+          header.so_bayar,
+          header.so_cash,
+          header.so_card,
+          header.so_voucher,
+          header.so_kembali,
+          header.so_bank_card,
+          header.so_user_kasir,
+        ],
+      );
+
+      // 2. Simpan Detail (tso_dtl) & Potong Stok
+      for (const d of details) {
+        await connection.query(
+          // sod_satuan_kasir sekarang dinamis sesuai kiriman HP (PCS/LSN/CRT)
+          `INSERT INTO tso_dtl (sod_so_nomor, sod_brg_kode, sod_qty, sod_harga, sod_satuan_kasir) VALUES (?, ?, ?, ?, ?)`,
+          [
+            header.so_nomor, 
+            d.sod_brg_kode, 
+            d.sod_qty, 
+            d.sod_harga, 
+            d.sod_satuan_kasir || "PCS" -- [FIX] Jangan di-hardcode PCS lagi
+          ],
+        );
+
+        // Potong stok master
+        await connection.query(
+          `UPDATE tmasterstok SET mst_stok_out = mst_stok_out + ? WHERE mst_brg_kode = ? AND mst_gdg_kode = ?`,
+          [d.sod_qty, d.sod_brg_kode, targetCabang],
+        );
+      }
+    }
+    await connection.commit();
+    res.status(200).json({ success: true });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error uploadBazarSales:", error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    connection.release();
+  }
+};
+
 module.exports = {
   downloadMasterBazar,
   uploadKoreksiBazar,
+  uploadBazarSales,
   // Fungsi uploadInvoice dan lainnya akan kita tambahkan di sini nanti
 };
