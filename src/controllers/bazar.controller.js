@@ -116,27 +116,45 @@ const uploadBazarSales = async (req, res) => {
     for (const nota of sales) {
       const { header, details } = nota;
 
-      // 1. FIX TANGGAL
+      // 1. GENERATE inv_id (Format: YYYYMMDDHHMMSS.sss)
+      // Kita buat ID unik berdasarkan waktu saat ini agar tidak bentrok
+      const now = new Date();
+      const invId =
+        now.getFullYear().toString() +
+        (now.getMonth() + 1).toString().padStart(2, "0") +
+        now.getDate().toString().padStart(2, "0") +
+        now.getHours().toString().padStart(2, "0") +
+        now.getMinutes().toString().padStart(2, "0") +
+        now.getSeconds().toString().padStart(2, "0") +
+        "." +
+        now.getMilliseconds().toString().padStart(3, "0");
+
+      // 2. FIX TANGGAL (YYYY-MM-DD)
       const formattedDate = header.so_tanggal.substring(0, 10);
 
-      // 2. FIX NOMOR (Max 20 Karakter)
-      // Jika kepanjangan, kita ambil 17 huruf depan + 3 angka terakhir (counter)
-      // Contoh: 'B01-RIZAL-20260120001' (21) -> 'B01-RIZAL-20260120001' (tetap aman jika pas)
+      // 3. FIX NOMOR (Max 20 Karakter)
+      // Jika nomor nota > 20, kita potong tengahnya agar counter belakang tidak hilang
       let cleanNomor = header.so_nomor;
       if (cleanNomor.length > 20) {
         cleanNomor = cleanNomor.substring(0, 17) + cleanNomor.slice(-3);
       }
 
-      // 3. INSERT HEADER (Gunakan REPLACE INTO untuk staging agar tidak error Duplicate)
+      // 4. INSERT HEADER (tinv_hdr_tmp)
+      // Gunakan REPLACE agar jika nomor nota sama, ID lama ditimpa (menghindari duplikat staging)
+      // Catatan: Karena inv_id berbeda setiap detik, kita hapus dulu berdasarkan inv_nomor
+      await connection.query(`DELETE FROM tinv_hdr_tmp WHERE inv_nomor = ?`, [
+        cleanNomor,
+      ]);
+
       await connection.query(
-        `REPLACE INTO tinv_hdr_tmp (
+        `INSERT INTO tinv_hdr_tmp (
           inv_id, inv_nomor, inv_tanggal, inv_cus_kode, 
           inv_rptunai, inv_rpcard, inv_nocard, inv_rpvoucher,
           user_create, date_create, inv_klerek, inv_ket
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), '0', ?)`,
         [
-          cleanNomor,
-          cleanNomor,
+          invId.substring(0, 20), // inv_id (PK)
+          cleanNomor, // inv_nomor
           formattedDate,
           header.so_customer,
           header.so_cash,
@@ -148,35 +166,40 @@ const uploadBazarSales = async (req, res) => {
         ],
       );
 
-      // 4. INSERT DETAIL
-      // Hapus detail lama dulu jika nomor nota sama (karena REPLACE header hanya untuk header)
+      // 5. INSERT DETAIL (tinv_dtl_tmp)
+      // Bersihkan detail lama dengan nomor nota yang sama
       await connection.query(
         `DELETE FROM tinv_dtl_tmp WHERE invd_inv_nomor = ?`,
         [cleanNomor],
       );
 
-      for (const d of details) {
+      for (let i = 0; i < details.length; i++) {
+        const d = details[i];
         const itemCode = d.barcode || d.sod_brg_kode;
         const itemQty = d.qty || d.sod_qty;
         const itemSize = d.ukuran || "";
 
+        // Generate invd_id (PK Detail) unik
+        const invdId = (invId + i).substring(0, 20);
+
         await connection.query(
           `INSERT INTO tinv_dtl_tmp (
-            invd_inv_nomor, invd_kode, invd_ukuran, 
+            invd_id, invd_inv_nomor, invd_kode, invd_ukuran, 
             invd_jumlah, invd_harga, invd_diskon, invd_nourut
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
+            invdId,
             cleanNomor,
             itemCode,
             itemSize,
             itemQty,
             d.harga || d.sod_harga,
             0,
-            0,
+            i + 1,
           ],
         );
 
-        // 5. UPDATE STOK
+        // 6. UPDATE STOK (tmasterstok)
         await connection.query(
           `UPDATE tmasterstok 
            SET mst_stok_out = mst_stok_out + ? 
@@ -189,7 +212,9 @@ const uploadBazarSales = async (req, res) => {
     }
 
     await connection.commit();
-    res.status(200).json({ success: true, message: "Upload Sukses!" });
+    res
+      .status(200)
+      .json({ success: true, message: "Upload Sukses Ke Staging!" });
   } catch (error) {
     await connection.rollback();
     console.error("Error uploadBazarSales:", error);
