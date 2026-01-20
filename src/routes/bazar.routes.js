@@ -9,5 +9,10 @@ router.get(
   authenticateToken,
   bazarController.downloadMasterBazar,
 );
+router.post(
+  "/upload-koreksi",
+  authenticateToken,
+  bazarController.uploadKoreksiBazar,
+);
 
 module.exports = router;

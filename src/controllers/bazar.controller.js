@@ -53,7 +53,62 @@ const downloadMasterBazar = async (req, res) => {
   }
 };
 
+const uploadKoreksiBazar = async (req, res) => {
+  const { header, details, targetCabang } = req.body;
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    // 1. Simpan Header (tkor_hdr)
+    const qHdr = `
+      INSERT INTO tkor_hdr 
+      (korh_nomor, korh_tanggal, korh_notes, korh_gdg_kode, korh_total, date_create, user_create)
+      VALUES (?, ?, ?, ?, ?, NOW(), ?)
+    `;
+    await connection.query(qHdr, [
+      header.no_koreksi,
+      header.tanggal,
+      "KOREKSI ANDROID BAZAR",
+      targetCabang,
+      header.total_nilai || 0,
+      header.operator || "ADMIN",
+    ]);
+
+    // 2. Simpan Detail (tkor_dtl)
+    const qDtl = `
+      INSERT INTO tkor_dtl 
+      (kord_korh_nomor, kord_brg_kode, kord_qty, kord_stok)
+      VALUES (?, ?, ?, ?)
+    `;
+
+    for (const item of details) {
+      await connection.query(qDtl, [
+        header.no_koreksi,
+        item.barcode,
+        item.selisih, // Nilai selisih (bisa plus atau minus)
+        item.qty_sistem,
+      ]);
+    }
+
+    await connection.commit();
+    res
+      .status(200)
+      .json({ success: true, message: "Koreksi stok berhasil di-upload." });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error uploadKoreksiBazar:", error);
+    res.status(500).json({
+      success: false,
+      message: "Gagal menyimpan koreksi ke database pusat.",
+    });
+  } finally {
+    connection.release();
+  }
+};
+
 module.exports = {
   downloadMasterBazar,
+  uploadKoreksiBazar,
   // Fungsi uploadInvoice dan lainnya akan kita tambahkan di sini nanti
 };
