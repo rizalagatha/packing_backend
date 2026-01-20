@@ -116,28 +116,33 @@ const uploadBazarSales = async (req, res) => {
     for (const nota of sales) {
       const { header, details } = nota;
 
-      // 1. Simpan ke tinv_hdr_tmp (Sesuai Logika Klerek)
-      // inv_id biasanya otomatis atau UUID, inv_nomor diisi No. Struk Bazar
-      const [resHdr] = await connection.query(
+      // 1. Sesuaikan Panjang Nomor (Max 20 Karakter untuk inv_id & inv_nomor)
+      // Kita potong sedikit atau pastikan formatnya masuk ke 20 char
+      // Contoh: B01-RZL-260120-001 (18 karakter)
+      const cleanNomor = header.so_nomor.substring(0, 20);
+
+      // 2. Simpan ke tinv_hdr_tmp (Sesuai DDL yang Abang kirim)
+      await connection.query(
         `INSERT INTO tinv_hdr_tmp (
-          inv_nomor, inv_tanggal, inv_cus_kode, 
+          inv_id, inv_nomor, inv_tanggal, inv_cus_kode, 
           inv_rptunai, inv_rpcard, inv_nocard, inv_rpvoucher,
-          user_create, date_create, inv_cab, inv_klerek
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, 0)`,
+          user_create, date_create, inv_klerek, inv_ket
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), '0', ?)`,
         [
-          header.so_nomor, // No Struk Bazar (B01-RIZAL-...)
-          header.so_tanggal, // Tanggal Transaksi
-          header.so_customer, // Kode Customer
-          header.so_cash, // Pembayaran Tunai
-          header.so_card, // Pembayaran Kartu
-          header.so_bank_card, // Nama Bank/EDC (Akan di-join ke finance.trekening di Klerek)
-          header.so_voucher, // Pembayaran Voucher
+          cleanNomor, // inv_id (Primary Key)
+          cleanNomor, // inv_nomor
+          header.so_tanggal,
+          header.so_customer,
+          header.so_cash, // inv_rptunai
+          header.so_card, // inv_rpcard
+          header.so_bank_card, // inv_nocard (Link ke rekening di Klerek)
+          header.so_voucher, // inv_rpvoucher
           header.so_user_kasir,
-          targetCabang, // Kode Cabang
+          "BAZAR ANDROID", // inv_ket
         ],
       );
 
-      // 2. Simpan ke tinv_dtl_tmp
+      // 3. Simpan ke tinv_dtl_tmp
       for (const d of details) {
         await connection.query(
           `INSERT INTO tinv_dtl_tmp (
@@ -145,18 +150,17 @@ const uploadBazarSales = async (req, res) => {
             invd_jumlah, invd_harga, invd_diskon, invd_nourut
           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
-            header.so_nomor,
+            cleanNomor,
             d.barcode || d.sod_brg_kode,
             d.ukuran || "",
             d.qty || d.sod_qty,
             d.harga || d.sod_harga,
-            0, // Diskon item (jika ada)
-            d.sod_nourut || 0,
+            0, // invd_diskon
+            0, // invd_nourut
           ],
         );
 
-        // POTONG STOK (Real-time di Gudang Pameran)
-        // Biasanya meskipun staging, stok pameran harus langsung berkurang
+        // Potong stok real-time di tmasterstok
         await connection.query(
           `UPDATE tmasterstok SET mst_stok_out = mst_stok_out + ? 
            WHERE mst_brg_kode = ? AND mst_gdg_kode = ?`,
@@ -166,9 +170,7 @@ const uploadBazarSales = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(200)
-      .json({ success: true, message: "Upload Staging Bazar Berhasil" });
+    res.status(200).json({ success: true, message: "Upload Staging Berhasil" });
   } catch (error) {
     await connection.rollback();
     console.error("Error uploadBazarSales:", error);
