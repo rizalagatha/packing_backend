@@ -113,34 +113,42 @@ const uploadBazarSales = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    for (const nota of sales) {
-      const { header, details } = nota;
+    // 1. Ambil waktu sekarang untuk base ID (14 digit: YYYYMMDDHHMMSS)
+    const now = new Date();
+    const timePart =
+      now.getFullYear().toString() +
+      (now.getMonth() + 1).toString().padStart(2, "0") +
+      now.getDate().toString().padStart(2, "0") +
+      now.getHours().toString().padStart(2, "0") +
+      now.getMinutes().toString().padStart(2, "0") +
+      now.getSeconds().toString().padStart(2, "0");
 
-      // 1. GENERATE inv_id (Format: YYYYMMDDHHMMSS.sss)
-      const now = new Date();
-      const invId =
-        now.getFullYear().toString() +
-        (now.getMonth() + 1).toString().padStart(2, "0") +
-        now.getDate().toString().padStart(2, "0") +
-        now.getHours().toString().padStart(2, "0") +
-        now.getMinutes().toString().padStart(2, "0") +
-        now.getSeconds().toString().padStart(2, "0") +
-        "." +
-        now.getMilliseconds().toString().padStart(3, "0");
+    for (let notaIdx = 0; notaIdx < sales.length; notaIdx++) {
+      const { header, details } = sales[notaIdx];
+
+      // 2. GENERATE inv_id (Header) - Total 20 Karakter
+      // Format: YYYYMMDDHHMMSS + "." + NoUrutNota(2) + "00"
+      // Contoh: 20260120195506.0100
+      const invIdHeader = `${timePart}.${(notaIdx + 1).toString().padStart(2, "0")}00`;
 
       const formattedDate = header.so_tanggal.substring(0, 10);
 
-      // 2. FIX NOMOR (Max 20 Karakter)
+      // 3. FIX NOMOR NOTA (Max 20 Char)
       let cleanNomor = header.so_nomor;
       if (cleanNomor.length > 20) {
         cleanNomor = cleanNomor.substring(0, 17) + cleanNomor.slice(-3);
       }
 
-      // 3. CLEAN & INSERT HEADER
+      // 4. BERSIHKAN DATA LAMA (PENTING: Agar tidak ada sampah dari upload gagal sebelumnya)
       await connection.query(`DELETE FROM tinv_hdr_tmp WHERE inv_nomor = ?`, [
         cleanNomor,
       ]);
+      await connection.query(
+        `DELETE FROM tinv_dtl_tmp WHERE invd_inv_nomor = ?`,
+        [cleanNomor],
+      );
 
+      // 5. INSERT HEADER
       await connection.query(
         `INSERT INTO tinv_hdr_tmp (
           inv_id, inv_nomor, inv_tanggal, inv_cus_kode, 
@@ -148,7 +156,7 @@ const uploadBazarSales = async (req, res) => {
           user_create, date_create, inv_klerek, inv_ket
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), '0', ?)`,
         [
-          invId.substring(0, 20),
+          invIdHeader,
           cleanNomor,
           formattedDate,
           header.so_customer,
@@ -161,27 +169,22 @@ const uploadBazarSales = async (req, res) => {
         ],
       );
 
-      // 4. CLEAN & INSERT DETAIL
-      await connection.query(
-        `DELETE FROM tinv_dtl_tmp WHERE invd_inv_nomor = ?`,
-        [cleanNomor],
-      );
-
+      // 6. INSERT DETAIL
       for (let i = 0; i < details.length; i++) {
         const d = details[i];
         const itemCode = d.barcode || d.sod_brg_kode;
         const itemQty = d.qty || d.sod_qty;
         const itemSize = d.ukuran || "";
 
-        // Buat ID unik untuk detail (Max 20 Karakter)
-        const invdId = (
-          invId.substring(0, 17) + (i + 1).toString().padStart(3, "0")
-        ).substring(0, 20);
+        // 7. GENERATE invd_idd (PK Detail) - Total 20 Karakter
+        // Format: YYYYMMDDHHMMSS + "." + NoUrutNota(2) + NoUrutItem(3)
+        // Contoh: 20260120195506.01001 (Item 1), 20260120195506.01002 (Item 2)
+        const invdIdd = `${timePart}.${(notaIdx + 1).toString().padStart(2, "0")}${(i + 1).toString().padStart(3, "0")}`;
 
         await connection.query(
           `INSERT INTO tinv_dtl_tmp (
             invd_id, 
-            invd_idd, -- [FIX] Ini Primary Key-nya
+            invd_idd, 
             invd_inv_nomor, 
             invd_kode, 
             invd_ukuran, 
@@ -191,8 +194,8 @@ const uploadBazarSales = async (req, res) => {
             invd_nourut
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
-            invdId, // invd_id
-            invdId, // invd_idd (PRIMARY KEY)
+            invIdHeader, // invd_id merujuk ke ID di Header
+            invdIdd, // invd_idd (PK UNIK)
             cleanNomor,
             itemCode,
             itemSize,
@@ -203,7 +206,7 @@ const uploadBazarSales = async (req, res) => {
           ],
         );
 
-        // 5. UPDATE STOK
+        // 8. UPDATE STOK
         await connection.query(
           `UPDATE tmasterstok 
            SET mst_stok_out = mst_stok_out + ? 
