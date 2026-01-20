@@ -16,8 +16,10 @@ const generateFinalToken = (user, cabangNama) => {
   // Gunakan toUpperCase() untuk antisipasi perbedaan huruf besar/kecil
   let expiresIn = "8h"; // Default
 
-  if (user.user_kode && user.user_kode.toUpperCase() === "HARIS") {
-    expiresIn = "30d"; // Khusus Haris
+  const specialUsers = ["HARIS", "SETYO"];
+
+  if (user.user_kode && specialUsers.includes(user.user_kode.toUpperCase())) {
+    expiresIn = "30d";
   }
 
   const token = jwt.sign(payload, process.env.JWT_SECRET, {
@@ -40,7 +42,7 @@ const login = async (req, res) => {
     // 1. Ambil SEMUA baris yang cocok dengan user_kode
     const [userRows] = await pool.query(
       "SELECT * FROM tuser WHERE user_kode = ?",
-      [user_kode]
+      [user_kode],
     );
     if (userRows.length === 0) {
       return res
@@ -63,13 +65,13 @@ const login = async (req, res) => {
       if (source === "web-cetak") {
         // Cari data user untuk cabang KDC atau KBS
         const webUser = userRows.find(
-          (u) => u.user_cab === "KDC" || u.user_cab === "KBS"
+          (u) => u.user_cab === "KDC" || u.user_cab === "KBS",
         );
         const userToUse = webUser || firstUser; // Fallback
 
         const [gudangRows] = await pool.query(
           "SELECT gdg_nama FROM tgudang WHERE gdg_kode = ?",
-          [userToUse.user_cab]
+          [userToUse.user_cab],
         );
         const cabangNama =
           gudangRows.length > 0 ? gudangRows[0].gdg_nama : userToUse.user_cab;
@@ -85,10 +87,10 @@ const login = async (req, res) => {
       const branchCodes = userRows.map((user) => user.user_cab);
       const [gudangRows] = await pool.query(
         "SELECT gdg_kode, gdg_nama FROM tgudang WHERE gdg_kode IN (?)",
-        [branchCodes]
+        [branchCodes],
       );
       const branchMap = new Map(
-        gudangRows.map((g) => [g.gdg_kode, g.gdg_nama])
+        gudangRows.map((g) => [g.gdg_kode, g.gdg_nama]),
       );
 
       const detailedBranches = userRows.map((user) => ({
@@ -115,7 +117,7 @@ const login = async (req, res) => {
       // --- KASUS CABANG TUNGGAL ---
       const [gudangRows] = await pool.query(
         "SELECT gdg_nama FROM tgudang WHERE gdg_kode = ?",
-        [firstUser.user_cab]
+        [firstUser.user_cab],
       );
       const cabangNama =
         gudangRows.length > 0 ? gudangRows[0].gdg_nama : firstUser.user_cab;
@@ -144,7 +146,7 @@ const selectBranch = async (req, res) => {
     // Ambil data user spesifik untuk cabang yang dipilih
     const [userRows] = await pool.query(
       "SELECT * FROM tuser WHERE user_kode = ? AND user_cab = ?",
-      [decoded.kode, branchCode]
+      [decoded.kode, branchCode],
     );
 
     if (userRows.length === 0) {
@@ -182,7 +184,7 @@ const updateFcmToken = async (req, res) => {
     // Asumsi primary key di tabel tuser adalah user_kode
     await pool.query(
       `UPDATE tuser SET user_fcm_token = ? WHERE user_kode = ?`,
-      [fcmToken, userKode]
+      [fcmToken, userKode],
     );
 
     res.json({ message: "FCM Token berhasil diupdate" });
