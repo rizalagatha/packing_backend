@@ -108,13 +108,13 @@ const uploadKoreksiBazar = async (req, res) => {
 };
 
 const uploadBazarSales = async (req, res) => {
-  const { sales, targetCabang } = req.body; 
+  const { sales, targetCabang } = req.body;
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
     for (const nota of sales) {
       const { header, details } = nota;
-      
+
       // 1. Simpan Header (tso_hdr)
       await connection.query(
         `INSERT INTO tso_hdr (so_nomor, so_tanggal, so_customer, so_total, so_bayar, so_cash, so_card, so_voucher, so_kembali, so_bank_card, so_user_kasir, date_create) 
@@ -140,11 +140,11 @@ const uploadBazarSales = async (req, res) => {
           // sod_satuan_kasir sekarang dinamis sesuai kiriman HP (PCS/LSN/CRT)
           `INSERT INTO tso_dtl (sod_so_nomor, sod_brg_kode, sod_qty, sod_harga, sod_satuan_kasir) VALUES (?, ?, ?, ?, ?)`,
           [
-            header.so_nomor, 
-            d.sod_brg_kode, 
-            d.sod_qty, 
-            d.sod_harga, 
-            d.sod_satuan_kasir || "PCS" -- [FIX] Jangan di-hardcode PCS lagi
+            header.so_nomor,
+            d.sod_brg_kode,
+            d.sod_qty,
+            d.sod_harga,
+            d.sod_satuan_kasir || "PCS",
           ],
         );
 
