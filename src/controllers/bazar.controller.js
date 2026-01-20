@@ -116,15 +116,20 @@ const uploadBazarSales = async (req, res) => {
     for (const nota of sales) {
       const { header, details } = nota;
 
-      // 1. FIX TANGGAL: Potong format ISO (2026-01-20T...) jadi (2026-01-20)
+      // 1. FIX TANGGAL
       const formattedDate = header.so_tanggal.substring(0, 10);
 
-      // 2. FIX NOMOR: Pastikan tidak lebih dari 20 karakter sesuai varchar(20)
-      const cleanNomor = header.so_nomor.substring(0, 20);
+      // 2. FIX NOMOR (Max 20 Karakter)
+      // Jika kepanjangan, kita ambil 17 huruf depan + 3 angka terakhir (counter)
+      // Contoh: 'B01-RIZAL-20260120001' (21) -> 'B01-RIZAL-20260120001' (tetap aman jika pas)
+      let cleanNomor = header.so_nomor;
+      if (cleanNomor.length > 20) {
+        cleanNomor = cleanNomor.substring(0, 17) + cleanNomor.slice(-3);
+      }
 
-      // 3. INSERT HEADER (tinv_hdr_tmp)
+      // 3. INSERT HEADER (Gunakan REPLACE INTO untuk staging agar tidak error Duplicate)
       await connection.query(
-        `INSERT INTO tinv_hdr_tmp (
+        `REPLACE INTO tinv_hdr_tmp (
           inv_id, inv_nomor, inv_tanggal, inv_cus_kode, 
           inv_rptunai, inv_rpcard, inv_nocard, inv_rpvoucher,
           user_create, date_create, inv_klerek, inv_ket
@@ -143,7 +148,13 @@ const uploadBazarSales = async (req, res) => {
         ],
       );
 
-      // 4. INSERT DETAIL (tinv_dtl_tmp) & UPDATE STOK
+      // 4. INSERT DETAIL
+      // Hapus detail lama dulu jika nomor nota sama (karena REPLACE header hanya untuk header)
+      await connection.query(
+        `DELETE FROM tinv_dtl_tmp WHERE invd_inv_nomor = ?`,
+        [cleanNomor],
+      );
+
       for (const d of details) {
         const itemCode = d.barcode || d.sod_brg_kode;
         const itemQty = d.qty || d.sod_qty;
@@ -165,8 +176,7 @@ const uploadBazarSales = async (req, res) => {
           ],
         );
 
-        // 5. FIX UPDATE STOK: Ganti mst_gdg_kode jadi mst_cab & tambah mst_ukuran
-        // Kita kurangi stok dengan menambah nilai mst_stok_out
+        // 5. UPDATE STOK
         await connection.query(
           `UPDATE tmasterstok 
            SET mst_stok_out = mst_stok_out + ? 
@@ -179,9 +189,7 @@ const uploadBazarSales = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(200)
-      .json({ success: true, message: "Upload Sukses, Stok Berkurang!" });
+    res.status(200).json({ success: true, message: "Upload Sukses!" });
   } catch (error) {
     await connection.rollback();
     console.error("Error uploadBazarSales:", error);
