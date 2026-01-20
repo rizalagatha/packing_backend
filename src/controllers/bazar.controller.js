@@ -117,7 +117,6 @@ const uploadBazarSales = async (req, res) => {
       const { header, details } = nota;
 
       // 1. GENERATE inv_id (Format: YYYYMMDDHHMMSS.sss)
-      // Kita buat ID unik berdasarkan waktu saat ini agar tidak bentrok
       const now = new Date();
       const invId =
         now.getFullYear().toString() +
@@ -129,19 +128,15 @@ const uploadBazarSales = async (req, res) => {
         "." +
         now.getMilliseconds().toString().padStart(3, "0");
 
-      // 2. FIX TANGGAL (YYYY-MM-DD)
       const formattedDate = header.so_tanggal.substring(0, 10);
 
-      // 3. FIX NOMOR (Max 20 Karakter)
-      // Jika nomor nota > 20, kita potong tengahnya agar counter belakang tidak hilang
+      // 2. FIX NOMOR (Max 20 Karakter)
       let cleanNomor = header.so_nomor;
       if (cleanNomor.length > 20) {
         cleanNomor = cleanNomor.substring(0, 17) + cleanNomor.slice(-3);
       }
 
-      // 4. INSERT HEADER (tinv_hdr_tmp)
-      // Gunakan REPLACE agar jika nomor nota sama, ID lama ditimpa (menghindari duplikat staging)
-      // Catatan: Karena inv_id berbeda setiap detik, kita hapus dulu berdasarkan inv_nomor
+      // 3. CLEAN & INSERT HEADER
       await connection.query(`DELETE FROM tinv_hdr_tmp WHERE inv_nomor = ?`, [
         cleanNomor,
       ]);
@@ -153,8 +148,8 @@ const uploadBazarSales = async (req, res) => {
           user_create, date_create, inv_klerek, inv_ket
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), '0', ?)`,
         [
-          invId.substring(0, 20), // inv_id (PK)
-          cleanNomor, // inv_nomor
+          invId.substring(0, 20),
+          cleanNomor,
           formattedDate,
           header.so_customer,
           header.so_cash,
@@ -166,8 +161,7 @@ const uploadBazarSales = async (req, res) => {
         ],
       );
 
-      // 5. INSERT DETAIL (tinv_dtl_tmp)
-      // Bersihkan detail lama dengan nomor nota yang sama
+      // 4. CLEAN & INSERT DETAIL
       await connection.query(
         `DELETE FROM tinv_dtl_tmp WHERE invd_inv_nomor = ?`,
         [cleanNomor],
@@ -179,16 +173,26 @@ const uploadBazarSales = async (req, res) => {
         const itemQty = d.qty || d.sod_qty;
         const itemSize = d.ukuran || "";
 
-        // Generate invd_id (PK Detail) unik
-        const invdId = (invId + i).substring(0, 20);
+        // Buat ID unik untuk detail (Max 20 Karakter)
+        const invdId = (
+          invId.substring(0, 17) + (i + 1).toString().padStart(3, "0")
+        ).substring(0, 20);
 
         await connection.query(
           `INSERT INTO tinv_dtl_tmp (
-            invd_id, invd_inv_nomor, invd_kode, invd_ukuran, 
-            invd_jumlah, invd_harga, invd_diskon, invd_nourut
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            invd_id, 
+            invd_idd, -- [FIX] Ini Primary Key-nya
+            invd_inv_nomor, 
+            invd_kode, 
+            invd_ukuran, 
+            invd_jumlah, 
+            invd_harga, 
+            invd_diskon, 
+            invd_nourut
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
-            invdId,
+            invdId, // invd_id
+            invdId, // invd_idd (PRIMARY KEY)
             cleanNomor,
             itemCode,
             itemSize,
@@ -199,7 +203,7 @@ const uploadBazarSales = async (req, res) => {
           ],
         );
 
-        // 6. UPDATE STOK (tmasterstok)
+        // 5. UPDATE STOK
         await connection.query(
           `UPDATE tmasterstok 
            SET mst_stok_out = mst_stok_out + ? 
@@ -212,9 +216,7 @@ const uploadBazarSales = async (req, res) => {
     }
 
     await connection.commit();
-    res
-      .status(200)
-      .json({ success: true, message: "Upload Sukses Ke Staging!" });
+    res.status(200).json({ success: true, message: "Upload Sukses!" });
   } catch (error) {
     await connection.rollback();
     console.error("Error uploadBazarSales:", error);
