@@ -116,13 +116,13 @@ const uploadBazarSales = async (req, res) => {
     for (const nota of sales) {
       const { header, details } = nota;
 
-      // 1. Perbaikan Format Tanggal (Ambil 10 karakter pertama: YYYY-MM-DD)
+      // 1. FIX TANGGAL: Potong format ISO (2026-01-20T...) jadi (2026-01-20)
       const formattedDate = header.so_tanggal.substring(0, 10);
 
-      // 2. Sesuaikan Panjang Nomor (Max 20 Karakter)
+      // 2. FIX NOMOR: Pastikan tidak lebih dari 20 karakter sesuai varchar(20)
       const cleanNomor = header.so_nomor.substring(0, 20);
 
-      // 3. Simpan ke tinv_hdr_tmp
+      // 3. INSERT HEADER (tinv_hdr_tmp)
       await connection.query(
         `INSERT INTO tinv_hdr_tmp (
           inv_id, inv_nomor, inv_tanggal, inv_cus_kode, 
@@ -132,7 +132,7 @@ const uploadBazarSales = async (req, res) => {
         [
           cleanNomor,
           cleanNomor,
-          formattedDate, // Pakai yang sudah di-format YYYY-MM-DD
+          formattedDate,
           header.so_customer,
           header.so_cash,
           header.so_card,
@@ -143,8 +143,12 @@ const uploadBazarSales = async (req, res) => {
         ],
       );
 
-      // 4. Simpan ke tinv_dtl_tmp
+      // 4. INSERT DETAIL (tinv_dtl_tmp) & UPDATE STOK
       for (const d of details) {
+        const itemCode = d.barcode || d.sod_brg_kode;
+        const itemQty = d.qty || d.sod_qty;
+        const itemSize = d.ukuran || "";
+
         await connection.query(
           `INSERT INTO tinv_dtl_tmp (
             invd_inv_nomor, invd_kode, invd_ukuran, 
@@ -152,26 +156,32 @@ const uploadBazarSales = async (req, res) => {
           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             cleanNomor,
-            d.barcode || d.sod_brg_kode,
-            d.ukuran || "",
-            d.qty || d.sod_qty,
+            itemCode,
+            itemSize,
+            itemQty,
             d.harga || d.sod_harga,
             0,
             0,
           ],
         );
 
-        // Update stok gudang pameran
+        // 5. FIX UPDATE STOK: Ganti mst_gdg_kode jadi mst_cab & tambah mst_ukuran
+        // Kita kurangi stok dengan menambah nilai mst_stok_out
         await connection.query(
-          `UPDATE tmasterstok SET mst_stok_out = mst_stok_out + ? 
-           WHERE mst_brg_kode = ? AND mst_gdg_kode = ?`,
-          [d.qty || d.sod_qty, d.barcode || d.sod_brg_kode, targetCabang],
+          `UPDATE tmasterstok 
+           SET mst_stok_out = mst_stok_out + ? 
+           WHERE mst_brg_kode = ? 
+             AND mst_cab = ? 
+             AND mst_ukuran = ?`,
+          [itemQty, itemCode, targetCabang, itemSize],
         );
       }
     }
 
     await connection.commit();
-    res.status(200).json({ success: true, message: "Upload Berhasil" });
+    res
+      .status(200)
+      .json({ success: true, message: "Upload Sukses, Stok Berkurang!" });
   } catch (error) {
     await connection.rollback();
     console.error("Error uploadBazarSales:", error);
