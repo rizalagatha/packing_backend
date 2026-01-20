@@ -112,51 +112,63 @@ const uploadBazarSales = async (req, res) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
+
     for (const nota of sales) {
       const { header, details } = nota;
 
-      // 1. Simpan Header (tso_hdr)
-      await connection.query(
-        `INSERT INTO tso_hdr (so_nomor, so_tanggal, so_customer, so_total, so_bayar, so_cash, so_card, so_voucher, so_kembali, so_bank_card, so_user_kasir, date_create) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      // 1. Simpan ke tinv_hdr_tmp (Sesuai Logika Klerek)
+      // inv_id biasanya otomatis atau UUID, inv_nomor diisi No. Struk Bazar
+      const [resHdr] = await connection.query(
+        `INSERT INTO tinv_hdr_tmp (
+          inv_nomor, inv_tanggal, inv_cus_kode, 
+          inv_rptunai, inv_rpcard, inv_nocard, inv_rpvoucher,
+          user_create, date_create, inv_cab, inv_klerek
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, 0)`,
         [
-          header.so_nomor,
-          header.so_tanggal,
-          header.so_customer,
-          header.so_total,
-          header.so_bayar,
-          header.so_cash,
-          header.so_card,
-          header.so_voucher,
-          header.so_kembali,
-          header.so_bank_card,
+          header.so_nomor, // No Struk Bazar (B01-RIZAL-...)
+          header.so_tanggal, // Tanggal Transaksi
+          header.so_customer, // Kode Customer
+          header.so_cash, // Pembayaran Tunai
+          header.so_card, // Pembayaran Kartu
+          header.so_bank_card, // Nama Bank/EDC (Akan di-join ke finance.trekening di Klerek)
+          header.so_voucher, // Pembayaran Voucher
           header.so_user_kasir,
+          targetCabang, // Kode Cabang
         ],
       );
 
-      // 2. Simpan Detail (tso_dtl) & Potong Stok
+      // 2. Simpan ke tinv_dtl_tmp
       for (const d of details) {
         await connection.query(
-          // sod_satuan_kasir sekarang dinamis sesuai kiriman HP (PCS/LSN/CRT)
-          `INSERT INTO tso_dtl (sod_so_nomor, sod_brg_kode, sod_qty, sod_harga, sod_satuan_kasir) VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO tinv_dtl_tmp (
+            invd_inv_nomor, invd_kode, invd_ukuran, 
+            invd_jumlah, invd_harga, invd_diskon, invd_nourut
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             header.so_nomor,
-            d.sod_brg_kode,
-            d.sod_qty,
-            d.sod_harga,
-            d.sod_satuan_kasir || "PCS",
+            d.barcode || d.sod_brg_kode,
+            d.ukuran || "",
+            d.qty || d.sod_qty,
+            d.harga || d.sod_harga,
+            0, // Diskon item (jika ada)
+            d.sod_nourut || 0,
           ],
         );
 
-        // Potong stok master
+        // POTONG STOK (Real-time di Gudang Pameran)
+        // Biasanya meskipun staging, stok pameran harus langsung berkurang
         await connection.query(
-          `UPDATE tmasterstok SET mst_stok_out = mst_stok_out + ? WHERE mst_brg_kode = ? AND mst_gdg_kode = ?`,
-          [d.sod_qty, d.sod_brg_kode, targetCabang],
+          `UPDATE tmasterstok SET mst_stok_out = mst_stok_out + ? 
+           WHERE mst_brg_kode = ? AND mst_gdg_kode = ?`,
+          [d.qty || d.sod_qty, d.barcode || d.sod_brg_kode, targetCabang],
         );
       }
     }
+
     await connection.commit();
-    res.status(200).json({ success: true });
+    res
+      .status(200)
+      .json({ success: true, message: "Upload Staging Bazar Berhasil" });
   } catch (error) {
     await connection.rollback();
     console.error("Error uploadBazarSales:", error);
