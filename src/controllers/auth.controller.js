@@ -9,6 +9,7 @@ const generateFinalToken = (user, cabangNama) => {
     nama: user.user_nama,
     cabang: user.user_cab,
     cabang_nama: cabangNama || user.user_cab,
+    user_kodekasir: user.user_kodekasir || "000",
   };
 
   // Tentukan durasi token
