@@ -32,7 +32,7 @@ const downloadMasterBazar = async (req, res) => {
 
     // 3. [TAMBAHAN] Query Rekening Bank / EDC
     const queryRekening = `
-      SELECT 
+      SELECT DISTINCT
         rek_rekening AS nomor_rekening, 
         rek_nama AS nama_bank 
       FROM finance.trekening 
