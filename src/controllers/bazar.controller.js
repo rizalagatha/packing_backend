@@ -30,10 +30,21 @@ const downloadMasterBazar = async (req, res) => {
       ORDER BY cus_nama ASC;
     `;
 
-    // Jalankan kedua query secara paralel agar cepat
-    const [[products], [customers]] = await Promise.all([
+    // 3. [TAMBAHAN] Query Rekening Bank / EDC
+    const queryRekening = `
+      SELECT 
+        rek_rekening AS nomor_rekening, 
+        rek_nama AS nama_bank 
+      FROM finance.trekening 
+      WHERE rek_aktif = 'Y'
+      ORDER BY rek_nama ASC;
+    `;
+
+    // Jalankan ketiga query secara paralel
+    const [[products], [customers], [rekening]] = await Promise.all([
       pool.query(queryBarang),
       pool.query(queryCustomer),
+      pool.query(queryRekening), // Tambahkan ini
     ]);
 
     res.status(200).json({
@@ -42,6 +53,7 @@ const downloadMasterBazar = async (req, res) => {
       data: {
         products: products,
         customers: customers,
+        rekening: rekening, // Kirim ke Android
       },
     });
   } catch (error) {
@@ -107,6 +119,22 @@ const uploadKoreksiBazar = async (req, res) => {
   }
 };
 
+const generateNewSetorNomor = async (connection, tanggal, cabang) => {
+  const date = new Date(tanggal);
+  const ayymm =
+    date.getFullYear().toString().slice(-2) +
+    (date.getMonth() + 1).toString().padStart(2, "0");
+  const prefix = `${cabang}.STR.${ayymm}.`;
+
+  const [rows] = await connection.query(
+    "SELECT IFNULL(MAX(RIGHT(sh_nomor, 4)), 0) as max_nomor FROM tsetor_hdr WHERE LEFT(sh_nomor, 12) = ?",
+    [prefix],
+  );
+
+  const nextNum = parseInt(rows[0].max_nomor, 10) + 1;
+  return `${prefix}${String(nextNum).padStart(4, "0")}`;
+};
+
 const uploadBazarSales = async (req, res) => {
   const { sales, targetCabang } = req.body;
   const connection = await pool.getConnection();
@@ -125,21 +153,26 @@ const uploadBazarSales = async (req, res) => {
 
     for (let notaIdx = 0; notaIdx < sales.length; notaIdx++) {
       const { header, details } = sales[notaIdx];
-
-      // 2. GENERATE inv_id (Header) - Total 20 Karakter
-      // Format: YYYYMMDDHHMMSS + "." + NoUrutNota(2) + "00"
-      // Contoh: 20260120195506.0100
-      const invIdHeader = `${timePart}.${(notaIdx + 1).toString().padStart(2, "0")}00`;
-
+      const invIdHeader =
+        `${timePart}.${(notaIdx + 1).toString().padStart(2, "0")}00`.substring(
+          0,
+          20,
+        );
       const formattedDate = header.so_tanggal.substring(0, 10);
+      let cleanNomor = header.so_nomor.substring(0, 20);
 
-      // 3. FIX NOMOR NOTA (Max 20 Char)
-      let cleanNomor = header.so_nomor;
-      if (cleanNomor.length > 20) {
-        cleanNomor = cleanNomor.substring(0, 17) + cleanNomor.slice(-3);
+      // --- LOGIKA SETORAN (CARD/TRANSFER) ---
+      let inv_nosetor = "";
+      let inv_jeniscard = "";
+      if (header.so_card > 0) {
+        inv_nosetor = await generateNewSetorNomor(
+          connection,
+          formattedDate,
+          targetCabang,
+        );
+        inv_jeniscard = "D"; // 'D' untuk Debit sesuai data lama
       }
 
-      // 4. BERSIHKAN DATA LAMA (PENTING: Agar tidak ada sampah dari upload gagal sebelumnya)
       await connection.query(`DELETE FROM tinv_hdr_tmp WHERE inv_nomor = ?`, [
         cleanNomor,
       ]);
@@ -152,18 +185,20 @@ const uploadBazarSales = async (req, res) => {
       await connection.query(
         `INSERT INTO tinv_hdr_tmp (
           inv_id, inv_nomor, inv_tanggal, inv_cus_kode, 
-          inv_rptunai, inv_rpcard, inv_nocard, inv_rpvoucher,
+          inv_rptunai, inv_rpcard, inv_nocard, inv_namabank, inv_jeniscard, inv_nosetor,
           user_create, date_create, inv_klerek, inv_ket
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), '0', ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), '0', ?)`,
         [
           invIdHeader,
           cleanNomor,
           formattedDate,
           header.so_customer,
-          header.so_cash,
-          header.so_card,
-          header.so_bank_card,
-          header.so_voucher,
+          header.so_cash || 0,
+          header.so_card || 0,
+          header.so_bank_card || "", // Diisi Nomor Rekening dari HP
+          header.so_bank_name || "", // Diisi Nama Bank dari HP
+          inv_jeniscard,
+          inv_nosetor,
           header.so_user_kasir,
           "BAZAR ANDROID",
         ],
