@@ -36,7 +36,7 @@ const downloadMasterBazar = async (req, res) => {
         rek_rekening AS nomor_rekening, 
         rek_nama AS nama_bank 
       FROM finance.trekening 
-      WHERE rek_aktif = 'Y'
+      WHERE rek_isaktif = 0
       ORDER BY rek_nama ASC;
     `;
 
