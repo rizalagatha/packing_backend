@@ -7,11 +7,17 @@ const downloadMasterBazar = async (req, res) => {
   SELECT 
     TRIM(d.brgd_barcode) AS barcode,
     d.brgd_kode AS kode,
-    TRIM(CONCAT(IFNULL(h.brg_jeniskaos, ''), ' ', IFNULL(h.brg_tipe, ''), ...)) AS nama,
+    TRIM(CONCAT(
+      IFNULL(h.brg_jeniskaos, ''), ' ', 
+      IFNULL(h.brg_tipe, ''), ' ', 
+      IFNULL(h.brg_lengan, ''), ' ', 
+      IFNULL(h.brg_jeniskain, ''), ' ', 
+      IFNULL(h.brg_warna, '')
+    )) AS nama,
     IFNULL(d.brgd_ukuran, '') AS ukuran,
     IFNULL(d.brgd_harga, 0) AS harga_jual,
-    h.brg_minqty AS promo_qty, -- Kolom baru
-    h.brg_ket AS keterangan,    -- Kolom baru (Box Group)
+    h.brg_minqty AS promo_qty, 
+    h.brg_ket AS keterangan,
     IFNULL(h.brg_ktg, '') AS kategori,
     IFNULL(h.brg_ktgp, '') AS tipe_produk
   FROM tbarangdc_dtl d
