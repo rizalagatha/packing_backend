@@ -16,6 +16,7 @@ const downloadMasterBazar = async (req, res) => {
     )) AS nama,
     IFNULL(d.brgd_ukuran, '') AS ukuran,
     IFNULL(d.brgd_harga, 0) AS harga_jual,
+    IFNULL(d.brgd_hrg1, 0) AS harga_spesial,
     h.brg_minqty AS promo_qty, 
     h.brg_ket AS keterangan,
     IFNULL(h.brg_ktg, '') AS kategori,
