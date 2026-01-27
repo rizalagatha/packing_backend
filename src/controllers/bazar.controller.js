@@ -29,10 +29,14 @@ const downloadMasterBazar = async (req, res) => {
     `;
 
     const queryCustomer = `
-      SELECT cus_kode, cus_nama, IFNULL(cus_alamat, '') as cus_alamat 
-      FROM tcustomer 
-      ORDER BY cus_nama ASC;
-    `;
+  SELECT 
+    cus_kode, 
+    cus_nama, 
+    IFNULL(cus_alamat, '') as cus_alamat,
+    cus_cab -- [TAMBAHKAN INI]
+  FROM tcustomer 
+  ORDER BY cus_nama ASC;
+`;
 
     const queryRekening = `
       SELECT DISTINCT
