@@ -35,11 +35,13 @@ const downloadMasterBazar = async (req, res) => {
 
     // 3. [TAMBAHAN] Query Rekening Bank / EDC
     const queryRekening = `
-      SELECT DISTINCT
+      SELECT 
         rek_rekening AS nomor_rekening, 
-        rek_nama AS nama_bank 
+        rek_nama AS nama_bank,
+        rek_kode AS kode
       FROM finance.trekening 
-      WHERE rek_isaktif = 0
+      WHERE rek_isaktif = 0 
+        AND rek_kaosan LIKE ? 
       ORDER BY rek_nama ASC;
     `;
 
