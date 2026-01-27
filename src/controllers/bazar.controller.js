@@ -1,55 +1,55 @@
 const pool = require("../config/database");
 
 const downloadMasterBazar = async (req, res) => {
-  try {
-    // 1. Query Barang
-    const queryBarang = `
-  SELECT 
-    TRIM(d.brgd_barcode) AS barcode,
-    d.brgd_kode AS kode,
-    TRIM(CONCAT(
-      IFNULL(h.brg_jeniskaos, ''), ' ', 
-      IFNULL(h.brg_tipe, ''), ' ', 
-      IFNULL(h.brg_lengan, ''), ' ', 
-      IFNULL(h.brg_jeniskain, ''), ' ', 
-      IFNULL(h.brg_warna, '')
-    )) AS nama,
-    IFNULL(d.brgd_ukuran, '') AS ukuran,
-    IFNULL(d.brgd_harga, 0) AS harga_jual,
-    IFNULL(d.brgd_hrg1, 0) AS harga_spesial,
-    h.brg_minqty AS promo_qty, 
-    h.brg_ket AS keterangan,
-    IFNULL(h.brg_ktg, '') AS kategori,
-    IFNULL(h.brg_ktgp, '') AS tipe_produk
-  FROM tbarangdc_dtl d
-  LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
-  ORDER BY d.brgd_barcode ASC;
-`;
+  // 1. Ambil parameter cabang dari query string (WAJIB ADA)
+  const { cabang } = req.query; // <--- PENTING: Ambil dari URL (?cabang=B01)
 
-    // 2. Query Customer
+  try {
+    const queryBarang = `
+      SELECT 
+        TRIM(d.brgd_barcode) AS barcode,
+        d.brgd_kode AS kode,
+        TRIM(CONCAT(
+          IFNULL(h.brg_jeniskaos, ''), ' ', 
+          IFNULL(h.brg_tipe, ''), ' ', 
+          IFNULL(h.brg_lengan, ''), ' ', 
+          IFNULL(h.brg_jeniskain, ''), ' ', 
+          IFNULL(h.brg_warna, '')
+        )) AS nama,
+        IFNULL(d.brgd_ukuran, '') AS ukuran,
+        IFNULL(d.brgd_harga, 0) AS harga_jual,
+        IFNULL(d.brgd_hrg1, 0) AS harga_spesial,
+        h.brg_minqty AS promo_qty, 
+        h.brg_ket AS keterangan,
+        IFNULL(h.brg_ktg, '') AS kategori,
+        IFNULL(h.brg_ktgp, '') AS tipe_produk
+      FROM tbarangdc_dtl d
+      LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
+      ORDER BY d.brgd_barcode ASC;
+    `;
+
     const queryCustomer = `
       SELECT cus_kode, cus_nama, IFNULL(cus_alamat, '') as cus_alamat 
       FROM tcustomer 
       ORDER BY cus_nama ASC;
     `;
 
-    // 3. [TAMBAHAN] Query Rekening Bank / EDC
     const queryRekening = `
-      SELECT 
+      SELECT DISTINCT
         rek_rekening AS nomor_rekening, 
         rek_nama AS nama_bank,
         rek_kode AS kode
       FROM finance.trekening 
-      WHERE rek_isaktif = 0 
+      WHERE rek_isaktif = 0
         AND rek_kaosan LIKE ? 
-      ORDER BY rek_nama ASC;
-    `;
+      ORDER BY rek_nama ASC
+    `; // Tip: Hapus tanda titik koma (;) di dalam string query agar lebih aman
 
-    // Jalankan ketiga query secara paralel
+    // 2. Jalankan query. Perhatikan argumen ke-2 di pool.query(queryRekening)
     const [[products], [customers], [rekening]] = await Promise.all([
       pool.query(queryBarang),
       pool.query(queryCustomer),
-      pool.query(queryRekening), // Tambahkan ini
+      pool.query(queryRekening, [`%${cabang || ""}%`]), // <--- PENTING: Kirim parameter array disini!
     ]);
 
     res.status(200).json({
@@ -58,7 +58,7 @@ const downloadMasterBazar = async (req, res) => {
       data: {
         products: products,
         customers: customers,
-        rekening: rekening, // Kirim ke Android
+        rekening: rekening,
       },
     });
   } catch (error) {
