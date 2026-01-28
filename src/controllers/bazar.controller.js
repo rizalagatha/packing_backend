@@ -218,7 +218,7 @@ const uploadBazarSales = async (req, res) => {
         const d = details[i];
         const itemCode = d.barcode || d.sod_brg_kode;
         const itemQty = d.qty || d.sod_qty;
-        const itemSize = d.ukuran || "";
+        const itemSize = d.ukuran || d.sod_ukuran || "";
 
         // 7. GENERATE invd_idd (PK Detail) - Total 20 Karakter
         // Format: YYYYMMDDHHMMSS + "." + NoUrutNota(2) + NoUrutItem(3)
