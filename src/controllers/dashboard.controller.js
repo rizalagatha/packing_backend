@@ -184,54 +184,48 @@ const getBranchPerformance = async (req, res) => {
   const user = req.user;
   if (user.cabang !== "KDC") return res.json([]);
 
+  // PENTING: Jika membandingkan dengan laporan Jan, pastikan filter bulannya sama
   const tahun = new Date().getFullYear();
   const bulan = new Date().getMonth() + 1;
 
   const query = `
     WITH MonthlySales AS (
-        SELECT 
-            cabang, 
-            SUM(nominal) AS nominal 
-        FROM v_sales_harian -- Menggunakan VIEW sesuai permintaan
+        SELECT cabang, SUM(nominal) AS nominal 
+        FROM v_sales_harian -- SUMBER DISAMAKAN PAKE VIEW
         WHERE YEAR(tanggal) = ? AND MONTH(tanggal) = ?
         GROUP BY cabang
     ),
     MonthlyTargets AS (
-        SELECT 
-            kode_gudang AS cabang, 
-            SUM(target_omset) AS target
+        SELECT kode_gudang AS cabang, SUM(target_omset) AS target
         FROM kpi.ttarget_kaosan
         WHERE tahun = ? AND bulan = ?
         GROUP BY cabang
     ),
     MonthlyReturns AS (
-        SELECT 
-            rh.rj_cab AS cabang,
-            SUM(
-                CASE 
-                    WHEN rh.rj_jenis = 'N' THEN ( -- Logika Tukar Barang
-                        SELECT GREATEST(0, 
-                            IFNULL(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)), 0) - 
-                            IFNULL((SELECT SUM(inv_rj_rp) FROM tinv_hdr WHERE inv_rj_nomor = rh.rj_nomor), 0)
-                        )
-                        FROM trj_dtl rd WHERE rd.rjd_nomor = rh.rj_nomor
+        SELECT rh.rj_cab AS cabang,
+        SUM(
+            CASE 
+                WHEN rh.rj_jenis = 'N' THEN ( -- Logika Tukar Barang
+                    SELECT GREATEST(0, 
+                        IFNULL(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)), 0) - 
+                        IFNULL((SELECT SUM(inv_rj_rp) FROM tinv_hdr WHERE inv_rj_nomor = rh.rj_nomor), 0)
                     )
-                    WHEN rh.rj_jenis = 'Y' THEN ( -- Logika Refund
-                        SELECT IFNULL(SUM(rfd_refund), 0) 
-                        FROM trefund_dtl 
-                        WHERE rfd_notrs = rh.rj_inv
-                    )
-                    ELSE 0
-                END
-            ) AS total_retur
+                    FROM trj_dtl rd WHERE rd.rjd_nomor = rh.rj_nomor
+                )
+                WHEN rh.rj_jenis = 'Y' THEN ( -- Logika Refund
+                    SELECT IFNULL(SUM(rfd_refund), 0) 
+                    FROM trefund_dtl 
+                    WHERE rfd_notrs = rh.rj_inv
+                )
+                ELSE 0
+            END
+        ) AS total_retur
         FROM trj_hdr rh
         WHERE YEAR(rh.rj_tanggal) = ? AND MONTH(rh.rj_tanggal) = ?
         GROUP BY rh.rj_cab
     ),
     MonthlyFees AS (
-        SELECT 
-            inv_cab AS cabang,
-            SUM(COALESCE(inv_mp_biaya_platform, 0)) AS total_fee
+        SELECT inv_cab AS cabang, SUM(COALESCE(inv_mp_biaya_platform, 0)) AS total_fee
         FROM tinv_hdr
         WHERE YEAR(inv_tanggal) = ? AND MONTH(inv_tanggal) = ?
         GROUP BY inv_cab
@@ -239,14 +233,13 @@ const getBranchPerformance = async (req, res) => {
     SELECT 
         g.gdg_kode AS kode_cabang,
         g.gdg_nama AS nama_cabang,
-        -- RUMUS NETTO: Omset - Retur - Fee MP
+        -- RUMUS UNIFIED: Omset - Retur - Fee
         ROUND(
             COALESCE(ms.nominal, 0) 
             - COALESCE(mr.total_retur, 0)
             - COALESCE(mf.total_fee, 0)
         , 0) AS nominal,
         COALESCE(mt.target, 0) AS target,
-        -- Hitung Achievement
         CASE 
             WHEN COALESCE(mt.target, 0) > 0 THEN 
                 ((COALESCE(ms.nominal, 0) - COALESCE(mr.total_retur, 0) - COALESCE(mf.total_fee, 0)) / mt.target) * 100 
@@ -257,12 +250,11 @@ const getBranchPerformance = async (req, res) => {
     LEFT JOIN MonthlyTargets mt ON g.gdg_kode = mt.cabang
     LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
     LEFT JOIN MonthlyFees mf ON g.gdg_kode = mf.cabang
-    WHERE (g.gdg_dc = 0 OR g.gdg_kode = 'KPR' OR g.gdg_kode = 'KON') 
-      AND g.gdg_kode <> 'KDC'
+    WHERE (g.gdg_dc = 0 OR g.gdg_kode = 'KPR' OR g.gdg_kode = 'KON') AND g.gdg_kode <> 'KDC'
     ORDER BY ach DESC;
   `;
 
-  // Total 8 parameter sesuai urutan CTE (Sales, Target, Returns, Fees)
+  // Total 8 parameter (Sales, Target, Returns, Fees)
   const params = [tahun, bulan, tahun, bulan, tahun, bulan, tahun, bulan];
 
   try {
@@ -270,9 +262,7 @@ const getBranchPerformance = async (req, res) => {
     res.json(rows);
   } catch (error) {
     console.error("Error getBranchPerformance:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Gagal memuat performa cabang" });
+    res.status(500).json({ success: false, message: "Gagal memuat data" });
   }
 };
 
