@@ -188,139 +188,71 @@ const getBranchPerformance = async (req, res) => {
   }
 
   try {
-    console.log("\n==============================");
-    console.log("🔍 BRANCH PERFORMANCE DEBUG");
-    console.log("==============================");
-
-    /* ===============================
-       1. CEK WAKTU & TIMEZONE DB
-    =============================== */
-    const [timeInfo] = await pool.query(`
-      SELECT 
-        NOW()               AS db_now,
-        CURRENT_DATE()      AS db_date,
-        @@global.time_zone  AS global_tz,
-        @@session.time_zone AS session_tz
-    `);
-
-    console.log("⏰ DB TIME INFO:");
-    console.table(timeInfo);
-
-    /* ===============================
-       2. CEK RANGE BULAN AKTIF
-    =============================== */
-    const [rangeInfo] = await pool.query(`
-      SELECT
-        DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01') AS start_date,
-        DATE_ADD(
-          DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'),
-          INTERVAL 1 MONTH
-        ) AS end_date,
-        YEAR(CURRENT_DATE())  AS tahun,
-        MONTH(CURRENT_DATE()) AS bulan
-    `);
-
-    console.log("📅 ACTIVE MONTH RANGE:");
-    console.table(rangeInfo);
-
-    /* ===============================
-       3. CEK SALES (v_sales_harian)
-    =============================== */
-    const [sales] = await pool.query(`
-      SELECT 
-        cabang,
-        SUM(nominal) AS total_sales
-      FROM v_sales_harian
-      WHERE tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
-        AND tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
-      GROUP BY cabang
-      ORDER BY cabang
-    `);
-
-    console.log("💰 MONTHLY SALES:");
-    console.table(sales);
-
-    /* ===============================
-       4. CEK RETURNS (RAW)
-    =============================== */
-    const [returnsRaw] = await pool.query(`
-      SELECT 
-        rh.rj_cab AS cabang,
-        COUNT(*) AS total_trx,
-        SUM(rh.rj_total) AS raw_retur
-      FROM trj_hdr rh
-      WHERE rh.rj_tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
-        AND rh.rj_tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
-      GROUP BY rh.rj_cab
-      ORDER BY rh.rj_cab
-    `);
-
-    console.log("↩️ RETURNS (RAW HEADER):");
-    console.table(returnsRaw);
-
-    /* ===============================
-       5. CEK FEES
-    =============================== */
-    const [fees] = await pool.query(`
-      SELECT 
-        inv_cab AS cabang,
-        COUNT(*) AS total_inv,
-        SUM(COALESCE(inv_mp_biaya_platform,0)) AS total_fee
-      FROM tinv_hdr
-      WHERE inv_tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
-        AND inv_tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
-      GROUP BY inv_cab
-      ORDER BY inv_cab
-    `);
-
-    console.log("🏦 MARKETPLACE FEES:");
-    console.table(fees);
-
-    /* ===============================
-       6. CEK TARGET
-    =============================== */
-    const [targets] = await pool.query(`
-      SELECT 
-        kode_gudang AS cabang,
-        SUM(target_omset) AS total_target
-      FROM kpi.ttarget_kaosan
-      WHERE tahun = YEAR(CURRENT_DATE())
-        AND bulan = MONTH(CURRENT_DATE())
-      GROUP BY kode_gudang
-      ORDER BY kode_gudang
-    `);
-
-    console.log("🎯 TARGETS:");
-    console.table(targets);
-
-    /* ===============================
-       7. QUERY FINAL (ASLI)
-    =============================== */
-    const finalQuery = `
+    const query = `
       WITH MonthlySales AS (
-        SELECT cabang, SUM(nominal) AS nominal
-        FROM v_sales_harian
-        WHERE tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
-          AND tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
-        GROUP BY cabang
+
+        SELECT 
+          LEFT(h.inv_nomor,3) AS cabang,
+
+          SUM(
+            (
+              SELECT 
+                SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon))
+              FROM tinv_dtl dd
+              WHERE dd.invd_inv_nomor = h.inv_nomor
+            )
+            - h.inv_disc
+            + (h.inv_ppn / 100) *
+              (
+                SELECT 
+                  SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon))
+                FROM tinv_dtl dd
+                WHERE dd.invd_inv_nomor = h.inv_nomor
+              )
+          ) AS nominal
+
+        FROM tinv_hdr h
+
+        WHERE h.inv_sts_pro = 0
+
+          AND h.date_create >= DATE_FORMAT(
+                CONVERT_TZ(NOW(),'+00:00','+07:00'),
+                '%Y-%m-01'
+              )
+
+          AND h.date_create < DATE_ADD(
+                DATE_FORMAT(
+                  CONVERT_TZ(NOW(),'+00:00','+07:00'),
+                  '%Y-%m-01'
+                ),
+                INTERVAL 1 MONTH
+              )
+
+        GROUP BY LEFT(h.inv_nomor,3)
+
       ),
 
       MonthlyTargets AS (
-        SELECT kode_gudang AS cabang, SUM(target_omset) AS target
+        SELECT 
+          kode_gudang AS cabang,
+          SUM(target_omset) AS target
         FROM kpi.ttarget_kaosan
-        WHERE tahun = YEAR(CURRENT_DATE())
-          AND bulan = MONTH(CURRENT_DATE())
+        WHERE tahun = YEAR(CONVERT_TZ(NOW(),'+00:00','+07:00'))
+          AND bulan = MONTH(CONVERT_TZ(NOW(),'+00:00','+07:00'))
         GROUP BY cabang
       ),
 
       MonthlyReturns AS (
         SELECT 
           rh.rj_cab AS cabang,
+
           SUM(
             CASE 
+
               WHEN rh.rj_jenis = 'N' THEN (
                 SELECT GREATEST(0,
-                  IFNULL(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)),0) -
+                  IFNULL(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)),0)
+                  -
                   IFNULL((
                     SELECT SUM(inv_rj_rp)
                     FROM tinv_hdr
@@ -338,11 +270,25 @@ const getBranchPerformance = async (req, res) => {
               )
 
               ELSE 0
+
             END
           ) AS total_retur
+
         FROM trj_hdr rh
-        WHERE rh.rj_tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
-          AND rh.rj_tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
+
+        WHERE rh.date_create >= DATE_FORMAT(
+              CONVERT_TZ(NOW(),'+00:00','+07:00'),
+              '%Y-%m-01'
+            )
+
+        AND rh.date_create < DATE_ADD(
+              DATE_FORMAT(
+                CONVERT_TZ(NOW(),'+00:00','+07:00'),
+                '%Y-%m-01'
+              ),
+              INTERVAL 1 MONTH
+            )
+
         GROUP BY rh.rj_cab
       ),
 
@@ -351,8 +297,20 @@ const getBranchPerformance = async (req, res) => {
           inv_cab AS cabang,
           SUM(COALESCE(inv_mp_biaya_platform,0)) AS total_fee
         FROM tinv_hdr
-        WHERE inv_tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
-          AND inv_tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
+
+        WHERE date_create >= DATE_FORMAT(
+              CONVERT_TZ(NOW(),'+00:00','+07:00'),
+              '%Y-%m-01'
+            )
+
+        AND date_create < DATE_ADD(
+              DATE_FORMAT(
+                CONVERT_TZ(NOW(),'+00:00','+07:00'),
+                '%Y-%m-01'
+              ),
+              INTERVAL 1 MONTH
+            )
+
         GROUP BY inv_cab
       )
 
@@ -381,6 +339,7 @@ const getBranchPerformance = async (req, res) => {
         END AS ach
 
       FROM tgudang g
+
       LEFT JOIN MonthlySales ms ON g.gdg_kode = ms.cabang
       LEFT JOIN MonthlyTargets mt ON g.gdg_kode = mt.cabang
       LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
@@ -392,21 +351,11 @@ const getBranchPerformance = async (req, res) => {
       ORDER BY ach DESC
     `;
 
-    const [finalRows] = await pool.query(finalQuery);
+    const [rows] = await pool.query(query);
 
-    console.log("🏁 FINAL RESULT:");
-    console.table(finalRows);
-
-    console.log("✅ DEBUG END");
-    console.log("==============================\n");
-
-    /* ===============================
-       8. RETURN KE CLIENT
-    =============================== */
-    return res.json(finalRows);
+    return res.json(rows);
   } catch (err) {
-    console.error("❌ BRANCH PERFORMANCE ERROR");
-    console.error(err);
+    console.error("❌ BRANCH PERFORMANCE ERROR:", err);
 
     return res.status(500).json({
       success: false,
