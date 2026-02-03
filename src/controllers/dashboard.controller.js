@@ -9,7 +9,7 @@ const getBranchFilter = (
   user,
   queryFilter,
   tableAlias = "h",
-  column = "inv_cab"
+  column = "inv_cab",
 ) => {
   let filter = "";
   let params = [];
@@ -188,72 +188,82 @@ const getBranchPerformance = async (req, res) => {
   const bulan = new Date().getMonth() + 1;
 
   const query = `
-    WITH 
-    -- 1. Hitung Netto per Invoice (Gross Items - Disc Header - MP Fee)
-    -- Group by inv_nomor mencegah duplikasi diskon/biaya
-    InvoiceNetto AS (
+    WITH MonthlySales AS (
         SELECT 
-            h.inv_cab AS cabang,
-            ROUND(
-                SUM((d.invd_harga - d.invd_diskon) * d.invd_jumlah) 
-                - COALESCE(h.inv_disc, 0)
-                - COALESCE(h.inv_mp_biaya_platform, 0)
-            , 0) AS nominal_invoice
-        FROM tinv_hdr h
-        JOIN tinv_dtl d ON h.inv_nomor = d.invd_inv_nomor
-        WHERE YEAR(h.inv_tanggal) = ? AND MONTH(h.inv_tanggal) = ? 
-          AND h.inv_sts_pro = 0
-        GROUP BY h.inv_nomor
+            cabang, 
+            SUM(nominal) AS nominal 
+        FROM v_sales_harian -- Menggunakan VIEW sesuai permintaan
+        WHERE YEAR(tanggal) = ? AND MONTH(tanggal) = ?
+        GROUP BY cabang
     ),
-
-    -- 2. Hitung Retur per Cabang
-    ReturNetto AS (
+    MonthlyTargets AS (
         SELECT 
-            rh.rj_cab AS cabang,
-            ROUND(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)), 0) AS nominal_retur
-        FROM trj_hdr rh
-        JOIN trj_dtl rd ON rh.rj_nomor = rd.rjd_nomor
-        WHERE YEAR(rh.rj_tanggal) = ? AND MONTH(rh.rj_tanggal) = ?
-        GROUP BY rh.rj_cab
-    ),
-
-    -- 3. Target per Cabang
-    TargetData AS (
-        SELECT kode_gudang AS cabang, SUM(target_omset) AS target
+            kode_gudang AS cabang, 
+            SUM(target_omset) AS target
         FROM kpi.ttarget_kaosan
         WHERE tahun = ? AND bulan = ?
         GROUP BY cabang
     ),
-
-    -- 4. Gabungkan Sales per Cabang
-    FinalSales AS (
-        SELECT cabang, SUM(nominal_invoice) AS total_sales
-        FROM InvoiceNetto
-        GROUP BY cabang
+    MonthlyReturns AS (
+        SELECT 
+            rh.rj_cab AS cabang,
+            SUM(
+                CASE 
+                    WHEN rh.rj_jenis = 'N' THEN ( -- Logika Tukar Barang
+                        SELECT GREATEST(0, 
+                            IFNULL(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)), 0) - 
+                            IFNULL((SELECT SUM(inv_rj_rp) FROM tinv_hdr WHERE inv_rj_nomor = rh.rj_nomor), 0)
+                        )
+                        FROM trj_dtl rd WHERE rd.rjd_nomor = rh.rj_nomor
+                    )
+                    WHEN rh.rj_jenis = 'Y' THEN ( -- Logika Refund
+                        SELECT IFNULL(SUM(rfd_refund), 0) 
+                        FROM trefund_dtl 
+                        WHERE rfd_notrs = rh.rj_inv
+                    )
+                    ELSE 0
+                END
+            ) AS total_retur
+        FROM trj_hdr rh
+        WHERE YEAR(rh.rj_tanggal) = ? AND MONTH(rh.rj_tanggal) = ?
+        GROUP BY rh.rj_cab
+    ),
+    MonthlyFees AS (
+        SELECT 
+            inv_cab AS cabang,
+            SUM(COALESCE(inv_mp_biaya_platform, 0)) AS total_fee
+        FROM tinv_hdr
+        WHERE YEAR(inv_tanggal) = ? AND MONTH(inv_tanggal) = ?
+        GROUP BY inv_cab
     )
-
-    -- 5. Hasil Akhir (Sales - Retur)
     SELECT 
         g.gdg_kode AS kode_cabang,
         g.gdg_nama AS nama_cabang,
-        COALESCE(fs.total_sales, 0) - COALESCE(mr.nominal_retur, 0) AS nominal,
-        COALESCE(td.target, 0) AS target,
+        -- RUMUS NETTO: Omset - Retur - Fee MP
+        ROUND(
+            COALESCE(ms.nominal, 0) 
+            - COALESCE(mr.total_retur, 0)
+            - COALESCE(mf.total_fee, 0)
+        , 0) AS nominal,
+        COALESCE(mt.target, 0) AS target,
+        -- Hitung Achievement
         CASE 
-            WHEN COALESCE(td.target, 0) > 0 THEN 
-                ((COALESCE(fs.total_sales, 0) - COALESCE(mr.nominal_retur, 0)) / td.target) * 100 
+            WHEN COALESCE(mt.target, 0) > 0 THEN 
+                ((COALESCE(ms.nominal, 0) - COALESCE(mr.total_retur, 0) - COALESCE(mf.total_fee, 0)) / mt.target) * 100 
             ELSE 0 
         END AS ach
     FROM tgudang g
-    LEFT JOIN FinalSales fs ON g.gdg_kode = fs.cabang
-    LEFT JOIN ReturNetto mr ON g.gdg_kode = mr.cabang
-    LEFT JOIN TargetData td ON g.gdg_kode = td.cabang
+    LEFT JOIN MonthlySales ms ON g.gdg_kode = ms.cabang
+    LEFT JOIN MonthlyTargets mt ON g.gdg_kode = mt.cabang
+    LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
+    LEFT JOIN MonthlyFees mf ON g.gdg_kode = mf.cabang
     WHERE (g.gdg_dc = 0 OR g.gdg_kode = 'KPR' OR g.gdg_kode = 'KON') 
       AND g.gdg_kode <> 'KDC'
     ORDER BY ach DESC;
   `;
 
-  // Urutan Parameter: Sales(Y,M), Retur(Y,M), Target(Y,M)
-  const params = [tahun, bulan, tahun, bulan, tahun, bulan];
+  // Total 8 parameter sesuai urutan CTE (Sales, Target, Returns, Fees)
+  const params = [tahun, bulan, tahun, bulan, tahun, bulan, tahun, bulan];
 
   try {
     const [rows] = await pool.query(query, params);
@@ -301,7 +311,7 @@ const getSalesChart = async (req, res) => {
                 WHERE DATE(h2.inv_tanggal) = DATE(h.inv_tanggal) 
                 ${branchCondition.replace(
                   "h.",
-                  "h2."
+                  "h2.",
                 )} -- FIX: Use alias h2 for subquery if needed, or rely on main WHERE
              ))
              -
@@ -592,21 +602,20 @@ const getProductTrends = async (req, res) => {
     };
 
     // 1. Query Kain
-    const qKain = buildQuery('a.brg_jeniskain');
+    const qKain = buildQuery("a.brg_jeniskain");
     const [resKain] = await pool.query(qKain.sql, qKain.params);
 
     // 2. Query Lengan
-    const qLengan = buildQuery('a.brg_lengan');
+    const qLengan = buildQuery("a.brg_lengan");
     const [resLengan] = await pool.query(qLengan.sql, qLengan.params);
 
     res.json({
       success: true,
       data: {
         kain: resKain,
-        lengan: resLengan
-      }
+        lengan: resLengan,
+      },
     });
-
   } catch (error) {
     console.error("Error getProductTrends:", error);
     res.status(500).json({ message: error.message });
@@ -658,11 +667,10 @@ const getEmptyStockReguler = async (req, res) => {
 
     // Urutan parameter: [cabang, search, search, search]
     const params = [branchToCheck, searchPattern, searchPattern, searchPattern];
-    
+
     const [rows] = await pool.query(query, params);
 
     res.json({ success: true, data: rows });
-
   } catch (error) {
     console.error("Error getEmptyStockReguler:", error);
     res.status(500).json({ message: error.message });
@@ -696,8 +704,8 @@ const getProductSalesSpread = async (req, res) => {
     const params = [kode, startDate, endDate];
 
     if (ukuran) {
-        query += ` AND d.invd_ukuran = ? `;
-        params.push(ukuran);
+      query += ` AND d.invd_ukuran = ? `;
+      params.push(ukuran);
     }
 
     query += `
@@ -711,7 +719,6 @@ const getProductSalesSpread = async (req, res) => {
       success: true,
       data: rows,
     });
-
   } catch (error) {
     console.error("Error getProductSalesSpread:", error);
     res.status(500).json({ message: error.message });
