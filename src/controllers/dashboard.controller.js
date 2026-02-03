@@ -234,11 +234,11 @@ const getBranchPerformance = async (req, res) => {
         g.gdg_kode AS kode_cabang,
         g.gdg_nama AS nama_cabang,
         -- RUMUS UNIFIED: Omset - Retur - Fee
-        ROUND(
-            COALESCE(ms.nominal, 0) 
-            - COALESCE(mr.total_retur, 0)
-            - COALESCE(mf.total_fee, 0)
-        , 0) AS nominal,
+        (
+          COALESCE(ms.nominal, 0) 
+          - COALESCE(mr.total_retur, 0)
+          - COALESCE(mf.total_fee, 0)
+        ) AS nominal,
         COALESCE(mt.target, 0) AS target,
         CASE 
             WHEN COALESCE(mt.target, 0) > 0 THEN 
