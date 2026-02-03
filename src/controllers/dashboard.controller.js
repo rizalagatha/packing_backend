@@ -182,108 +182,236 @@ const getSalesTargetSummary = async (req, res) => {
 // --- 4. PERFORMA CABANG (OPTIMALISASI UTAMA) ---
 const getBranchPerformance = async (req, res) => {
   const user = req.user;
-  if (user.cabang !== "KDC") return res.json([]);
 
-  const query = `
-    WITH MonthlySales AS (
-      SELECT cabang, SUM(nominal) AS nominal
+  if (user.cabang !== "KDC") {
+    return res.json([]);
+  }
+
+  try {
+    console.log("\n==============================");
+    console.log("🔍 BRANCH PERFORMANCE DEBUG");
+    console.log("==============================");
+
+    /* ===============================
+       1. CEK WAKTU & TIMEZONE DB
+    =============================== */
+    const [timeInfo] = await pool.query(`
+      SELECT 
+        NOW()               AS db_now,
+        CURRENT_DATE()      AS db_date,
+        @@global.time_zone  AS global_tz,
+        @@session.time_zone AS session_tz
+    `);
+
+    console.log("⏰ DB TIME INFO:");
+    console.table(timeInfo);
+
+    /* ===============================
+       2. CEK RANGE BULAN AKTIF
+    =============================== */
+    const [rangeInfo] = await pool.query(`
+      SELECT
+        DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01') AS start_date,
+        DATE_ADD(
+          DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'),
+          INTERVAL 1 MONTH
+        ) AS end_date,
+        YEAR(CURRENT_DATE())  AS tahun,
+        MONTH(CURRENT_DATE()) AS bulan
+    `);
+
+    console.log("📅 ACTIVE MONTH RANGE:");
+    console.table(rangeInfo);
+
+    /* ===============================
+       3. CEK SALES (v_sales_harian)
+    =============================== */
+    const [sales] = await pool.query(`
+      SELECT 
+        cabang,
+        SUM(nominal) AS total_sales
       FROM v_sales_harian
       WHERE tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
         AND tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
       GROUP BY cabang
-    ),
+      ORDER BY cabang
+    `);
 
-    MonthlyTargets AS (
-      SELECT kode_gudang AS cabang, SUM(target_omset) AS target
-      FROM kpi.ttarget_kaosan
-      WHERE tahun = YEAR(CURRENT_DATE())
-        AND bulan = MONTH(CURRENT_DATE())
-      GROUP BY cabang
-    ),
+    console.log("💰 MONTHLY SALES:");
+    console.table(sales);
 
-    MonthlyReturns AS (
+    /* ===============================
+       4. CEK RETURNS (RAW)
+    =============================== */
+    const [returnsRaw] = await pool.query(`
       SELECT 
         rh.rj_cab AS cabang,
-        SUM(
-          CASE 
-            WHEN rh.rj_jenis = 'N' THEN (
-              SELECT GREATEST(0,
-                IFNULL(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)),0) -
-                IFNULL((SELECT SUM(inv_rj_rp)
-                        FROM tinv_hdr
-                        WHERE inv_rj_nomor = rh.rj_nomor),0)
-              )
-              FROM trj_dtl rd
-              WHERE rd.rjd_nomor = rh.rj_nomor
-            )
-
-            WHEN rh.rj_jenis = 'Y' THEN (
-              SELECT IFNULL(SUM(rfd_refund),0)
-              FROM trefund_dtl
-              WHERE rfd_notrs = rh.rj_inv
-            )
-
-            ELSE 0
-          END
-        ) AS total_retur
+        COUNT(*) AS total_trx,
+        SUM(rh.rj_total) AS raw_retur
       FROM trj_hdr rh
       WHERE rh.rj_tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
         AND rh.rj_tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
       GROUP BY rh.rj_cab
-    ),
+      ORDER BY rh.rj_cab
+    `);
 
-    MonthlyFees AS (
+    console.log("↩️ RETURNS (RAW HEADER):");
+    console.table(returnsRaw);
+
+    /* ===============================
+       5. CEK FEES
+    =============================== */
+    const [fees] = await pool.query(`
       SELECT 
         inv_cab AS cabang,
+        COUNT(*) AS total_inv,
         SUM(COALESCE(inv_mp_biaya_platform,0)) AS total_fee
       FROM tinv_hdr
       WHERE inv_tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
         AND inv_tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
       GROUP BY inv_cab
-    )
+      ORDER BY inv_cab
+    `);
 
-    SELECT 
-      g.gdg_kode AS kode_cabang,
-      g.gdg_nama AS nama_cabang,
+    console.log("🏦 MARKETPLACE FEES:");
+    console.table(fees);
 
-      (
-        COALESCE(ms.nominal,0)
-        - COALESCE(mr.total_retur,0)
-        - COALESCE(mf.total_fee,0)
-      ) AS nominal,
+    /* ===============================
+       6. CEK TARGET
+    =============================== */
+    const [targets] = await pool.query(`
+      SELECT 
+        kode_gudang AS cabang,
+        SUM(target_omset) AS total_target
+      FROM kpi.ttarget_kaosan
+      WHERE tahun = YEAR(CURRENT_DATE())
+        AND bulan = MONTH(CURRENT_DATE())
+      GROUP BY kode_gudang
+      ORDER BY kode_gudang
+    `);
 
-      COALESCE(mt.target,0) AS target,
+    console.log("🎯 TARGETS:");
+    console.table(targets);
 
-      CASE
-        WHEN COALESCE(mt.target,0) > 0 THEN
-          (
+    /* ===============================
+       7. QUERY FINAL (ASLI)
+    =============================== */
+    const finalQuery = `
+      WITH MonthlySales AS (
+        SELECT cabang, SUM(nominal) AS nominal
+        FROM v_sales_harian
+        WHERE tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
+          AND tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
+        GROUP BY cabang
+      ),
+
+      MonthlyTargets AS (
+        SELECT kode_gudang AS cabang, SUM(target_omset) AS target
+        FROM kpi.ttarget_kaosan
+        WHERE tahun = YEAR(CURRENT_DATE())
+          AND bulan = MONTH(CURRENT_DATE())
+        GROUP BY cabang
+      ),
+
+      MonthlyReturns AS (
+        SELECT 
+          rh.rj_cab AS cabang,
+          SUM(
+            CASE 
+              WHEN rh.rj_jenis = 'N' THEN (
+                SELECT GREATEST(0,
+                  IFNULL(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)),0) -
+                  IFNULL((
+                    SELECT SUM(inv_rj_rp)
+                    FROM tinv_hdr
+                    WHERE inv_rj_nomor = rh.rj_nomor
+                  ),0)
+                )
+                FROM trj_dtl rd
+                WHERE rd.rjd_nomor = rh.rj_nomor
+              )
+
+              WHEN rh.rj_jenis = 'Y' THEN (
+                SELECT IFNULL(SUM(rfd_refund),0)
+                FROM trefund_dtl
+                WHERE rfd_notrs = rh.rj_inv
+              )
+
+              ELSE 0
+            END
+          ) AS total_retur
+        FROM trj_hdr rh
+        WHERE rh.rj_tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
+          AND rh.rj_tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
+        GROUP BY rh.rj_cab
+      ),
+
+      MonthlyFees AS (
+        SELECT 
+          inv_cab AS cabang,
+          SUM(COALESCE(inv_mp_biaya_platform,0)) AS total_fee
+        FROM tinv_hdr
+        WHERE inv_tanggal >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
+          AND inv_tanggal <  DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
+        GROUP BY inv_cab
+      )
+
+      SELECT 
+        g.gdg_kode AS kode_cabang,
+        g.gdg_nama AS nama_cabang,
+
+        (
+          COALESCE(ms.nominal,0)
+          - COALESCE(mr.total_retur,0)
+          - COALESCE(mf.total_fee,0)
+        ) AS nominal,
+
+        COALESCE(mt.target,0) AS target,
+
+        CASE
+          WHEN COALESCE(mt.target,0) > 0 THEN
             (
-              COALESCE(ms.nominal,0)
-              - COALESCE(mr.total_retur,0)
-              - COALESCE(mf.total_fee,0)
-            ) / mt.target
-          ) * 100
-        ELSE 0
-      END AS ach
+              (
+                COALESCE(ms.nominal,0)
+                - COALESCE(mr.total_retur,0)
+                - COALESCE(mf.total_fee,0)
+              ) / mt.target
+            ) * 100
+          ELSE 0
+        END AS ach
 
-    FROM tgudang g
-    LEFT JOIN MonthlySales ms ON g.gdg_kode = ms.cabang
-    LEFT JOIN MonthlyTargets mt ON g.gdg_kode = mt.cabang
-    LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
-    LEFT JOIN MonthlyFees mf ON g.gdg_kode = mf.cabang
+      FROM tgudang g
+      LEFT JOIN MonthlySales ms ON g.gdg_kode = ms.cabang
+      LEFT JOIN MonthlyTargets mt ON g.gdg_kode = mt.cabang
+      LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
+      LEFT JOIN MonthlyFees mf ON g.gdg_kode = mf.cabang
 
-    WHERE (g.gdg_dc = 0 OR g.gdg_kode IN ('KPR','KON'))
-      AND g.gdg_kode <> 'KDC'
+      WHERE (g.gdg_dc = 0 OR g.gdg_kode IN ('KPR','KON'))
+        AND g.gdg_kode <> 'KDC'
 
-    ORDER BY ach DESC;
-  `;
+      ORDER BY ach DESC
+    `;
 
-  try {
-    const [rows] = await pool.query(query);
-    res.json(rows);
+    const [finalRows] = await pool.query(finalQuery);
+
+    console.log("🏁 FINAL RESULT:");
+    console.table(finalRows);
+
+    console.log("✅ DEBUG END");
+    console.log("==============================\n");
+
+    /* ===============================
+       8. RETURN KE CLIENT
+    =============================== */
+    return res.json(finalRows);
   } catch (err) {
+    console.error("❌ BRANCH PERFORMANCE ERROR");
     console.error(err);
-    res.status(500).json({ message: "Gagal load performa cabang" });
+
+    return res.status(500).json({
+      success: false,
+      message: "Gagal memuat performa cabang",
+    });
   }
 };
 
