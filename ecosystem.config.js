@@ -21,7 +21,7 @@ module.exports = {
         DB_PASSWORD: "Kencana#123",
         DB_DATABASE: "retail",
         DB_PORT: 3307,
-        JWT_SECRET: "9f5c92853c97dfeec4c7a9d1353dcc30",
+        JWT_SECRET: "s+qG0PB3JQB/jHABdHfVejMBUm9zJtE4Mb1GHMAYXsw=",
       },
     },
     {
@@ -45,7 +45,7 @@ module.exports = {
         DB_PASSWORD: "Kencana#123",
         DB_DATABASE: "retailnew", // DATABASE BERBEDA
         DB_PORT: 3307,
-        JWT_SECRET: "9f5c92853c97dfeec4c7a9d1353dcc30",
+        JWT_SECRET: "s+qG0PB3JQB/jHABdHfVejMBUm9zJtE4Mb1GHMAYXsw=",
       },
     },
   ],

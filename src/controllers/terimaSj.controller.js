@@ -30,7 +30,7 @@ const searchSj = async (req, res) => {
 
     // Query untuk mencari SJ yang ditujukan ke cabang/store user, dan belum pernah diterima
     const query = `
-            SELECT sj_nomor AS nomor, sj_tanggal AS tanggal 
+            SELECT sj_nomor AS nomor, sj_tanggal AS tanggal, sj_mt_nomor AS pl_nomor 
             FROM tdc_sj_hdr 
             WHERE sj_kecab = ? AND (sj_noterima IS NULL OR sj_noterima = '') AND sj_nomor LIKE ?
             ORDER BY sj_tanggal DESC;
@@ -79,7 +79,7 @@ const saveData = async (req, res) => {
 
     const tjNomor = await generateNewTjNumber(
       user.cabang,
-      header.tanggalTerima
+      header.tanggalTerima,
     );
     const timestamp = format(new Date(), "yyyyMMddHHmmssSSS");
     const idrec = `${user.cabang}TJ${timestamp}`;
@@ -93,7 +93,7 @@ const saveData = async (req, res) => {
         header.nomorMinta,
         user.cabang,
         user.kode,
-      ]
+      ],
     );
 
     const detailValues = items
@@ -114,19 +114,19 @@ const saveData = async (req, res) => {
     if (detailValues.length > 0) {
       await connection.query(
         `INSERT INTO ttrm_sj_dtl (tjd_idrec, tjd_iddrec, tjd_nomor, tjd_kode, tjd_ukuran, tjd_jumlah) VALUES ?;`,
-        [detailValues]
+        [detailValues],
       );
     }
 
     await connection.query(
       "UPDATE tdc_sj_hdr SET sj_noterima = ? WHERE sj_nomor = ?",
-      [tjNomor, header.nomorSj]
+      [tjNomor, header.nomorSj],
     );
 
     if (header.nomorPending) {
       await connection.query(
         'UPDATE tpendingsj SET status = "CLOSE", tj_nomor = ? WHERE pending_nomor = ?',
-        [tjNomor, header.nomorPending]
+        [tjNomor, header.nomorPending],
       );
     }
 
@@ -163,7 +163,7 @@ const savePending = async (req, res) => {
           header.tanggalTerima,
           pending_nomor,
           user.cabang,
-        ]
+        ],
       );
 
       await connection.commit();
@@ -175,7 +175,7 @@ const savePending = async (req, res) => {
       // --- LOGIKA MEMBUAT PENDING BARU ---
       const newPendingNomor = await generateNewPendingNumber(
         user.cabang,
-        header.tanggalTerima
+        header.tanggalTerima,
       );
 
       const pendingData = {
@@ -243,7 +243,7 @@ const loadPendingSj = async (req, res) => {
     const { pendingNomor } = req.params;
     const [rows] = await pool.query(
       "SELECT * FROM tpendingsj WHERE pending_nomor = ?",
-      [pendingNomor]
+      [pendingNomor],
     );
     if (rows.length === 0) {
       return res
@@ -255,7 +255,7 @@ const loadPendingSj = async (req, res) => {
     // Muat juga data header SJ asli untuk kelengkapan info
     const [sjHeaderRows] = await pool.query(
       `SELECT h.sj_nomor, h.sj_tanggal, h.sj_mt_nomor, h.sj_ket AS keterangan, h.sj_cab AS gudang_asal_kode, g_asal.gdg_nama AS gudang_asal_nama FROM tdc_sj_hdr h LEFT JOIN tgudang g_asal ON g_asal.gdg_kode = h.sj_cab WHERE h.sj_nomor = ?;`,
-      [pendingData.sj_nomor]
+      [pendingData.sj_nomor],
     );
 
     res.status(200).json({
