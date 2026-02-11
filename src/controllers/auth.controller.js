@@ -15,7 +15,7 @@ const generateFinalToken = (user, cabangNama) => {
   // Tentukan durasi token
   // Jika user adalah HARIS, set 30 hari, selain itu 8 jam
   // Gunakan toUpperCase() untuk antisipasi perbedaan huruf besar/kecil
-  let expiresIn = "8h"; // Default
+  let expiresIn = "12h"; // Default
 
   const specialUsers = ["HARIS", "SETYO"];
 
