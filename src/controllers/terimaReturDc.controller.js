@@ -6,12 +6,19 @@ const generateNomorTerima = async (connection, tanggal) => {
     .toISOString()
     .slice(2, 7)
     .replace("-", "");
-  const prefix = `KDC.RB.${yearMonth}.`;
-  const [rows] = await connection.query(
-    "SELECT IFNULL(MAX(RIGHT(rb_nomor, 4)), 0) + 1 AS next_num FROM tdcrb_hdr WHERE LEFT(rb_nomor, 11) = ?",
-    [prefix],
-  );
-  return `${prefix}${rows[0].next_num.toString().padStart(4, "0")}`;
+  const prefix = `KDC.RB.${yearMonth}.`; // Hasil: KDC.RB.2602.
+
+  // Gunakan LIKE supaya lebih fleksibel nyarinya
+  const query = `
+    SELECT IFNULL(MAX(CAST(RIGHT(rb_nomor, 4) AS UNSIGNED)), 0) + 1 AS next_num 
+    FROM tdcrb_hdr 
+    WHERE rb_nomor LIKE ?
+  `;
+
+  const [rows] = await connection.query(query, [`${prefix}%`]);
+  const nextNum = rows[0].next_num.toString().padStart(4, "0");
+
+  return `${prefix}${nextNum}`;
 };
 
 // --- Helper: Generate Nomor Koreksi (KDC.KOR.YYMM.XXXX) ---
@@ -110,121 +117,137 @@ const loadDetail = async (req, res) => {
 
 // 3. Simpan Penerimaan Final (Update Stok DC + Auto Koreksi)
 const saveTerima = async (req, res) => {
-  const connection = await pool.getConnection();
-  await connection.beginTransaction();
+  let retries = 3;
 
-  try {
-    const { header, items } = req.body;
-    const user = req.user;
+  while (retries > 0) {
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
 
-    console.log("--- PROSES SIMPAN FINAL RETUR ---");
-    console.log("Nomor RB Asal:", header.nomorRb);
+    try {
+      const { header, items } = req.body;
+      const user = req.user;
 
-    if (!items || items.length === 0) {
-      throw new Error("Tidak ada item yang diterima.");
-    }
+      console.log("--- PROSES SIMPAN FINAL RETUR ---");
+      console.log("Nomor RB Asal:", header.nomorRb);
 
-    // 1. Inisialisasi selisihItems (WAJIB ADA BIAR GAK ERROR)
-    const selisihItems = [];
-
-    // 2. Generate Nomor Terima
-    const nomorTerima = await generateNomorTerima(connection, header.tanggal);
-
-    // 3. Simpan Header (tdcrb_hdr)
-    await connection.query(
-      "INSERT INTO tdcrb_hdr (rb_nomor, rb_tanggal, user_create, date_create) VALUES (?, ?, ?, NOW())",
-      [nomorTerima, header.tanggal, user.kode],
-    );
-
-    // 4. Update status di Dokumen Asal (trbdc_hdr)
-    await connection.query(
-      "UPDATE trbdc_hdr SET rb_noterima = ? WHERE rb_nomor = ?",
-      [nomorTerima, header.nomorRb],
-    );
-
-    // 5. BULK INSERT DETAIL (tdcrb_dtl)
-    const valuesForInsert = items.map((it, index) => {
-      const urutan = String(index + 1).padStart(3, "0");
-
-      // rbd_iddrec (Contoh: KDC.RB.2602.0001.001) -> Total 20 karakter, aman di VARCHAR(30)
-      const iddrec = `${nomorTerima}.${urutan}`;
-
-      if (Number(it.jumlahTerima) !== Number(it.jumlahKirim)) {
-        selisihItems.push(it);
+      if (!items || items.length === 0) {
+        throw new Error("Tidak ada item yang diterima.");
       }
 
-      return [
-        iddrec, // Kolom 1: rbd_iddrec
-        nomorTerima, // Kolom 2: rbd_nomor
-        it.kode, // Kolom 3: rbd_kode
-        it.ukuran, // Kolom 4: rbd_ukuran
-        Number(it.jumlahTerima), // Kolom 5: rbd_jumlah
-      ];
-    });
+      // 1. Inisialisasi selisihItems (WAJIB ADA BIAR GAK ERROR)
+      const selisihItems = [];
 
-    // 2. Eksekusi Bulk Insert
-    const sqlInsertDetail = `
+      // 2. Generate Nomor Terima
+      const nomorTerima = await generateNomorTerima(connection, header.tanggal);
+
+      // 3. Simpan Header (tdcrb_hdr)
+      await connection.query(
+        "INSERT INTO tdcrb_hdr (rb_nomor, rb_tanggal, user_create, date_create) VALUES (?, ?, ?, NOW())",
+        [nomorTerima, header.tanggal, user.kode],
+      );
+
+      // 4. Update status di Dokumen Asal (trbdc_hdr)
+      await connection.query(
+        "UPDATE trbdc_hdr SET rb_noterima = ? WHERE rb_nomor = ?",
+        [nomorTerima, header.nomorRb],
+      );
+
+      // 5. BULK INSERT DETAIL (tdcrb_dtl)
+      const valuesForInsert = items.map((it, index) => {
+        const urutan = String(index + 1).padStart(3, "0");
+
+        // rbd_iddrec (Contoh: KDC.RB.2602.0001.001) -> Total 20 karakter, aman di VARCHAR(30)
+        const iddrec = `${nomorTerima}.${urutan}`;
+
+        if (Number(it.jumlahTerima) !== Number(it.jumlahKirim)) {
+          selisihItems.push(it);
+        }
+
+        return [
+          iddrec, // Kolom 1: rbd_iddrec
+          nomorTerima, // Kolom 2: rbd_nomor
+          it.kode, // Kolom 3: rbd_kode
+          it.ukuran, // Kolom 4: rbd_ukuran
+          Number(it.jumlahTerima), // Kolom 5: rbd_jumlah
+        ];
+      });
+
+      // 2. Eksekusi Bulk Insert
+      const sqlInsertDetail = `
       INSERT INTO tdcrb_dtl 
       (rbd_iddrec, rbd_nomor, rbd_kode, rbd_ukuran, rbd_jumlah) 
       VALUES ?
     `;
 
-    await connection.query(sqlInsertDetail, [valuesForInsert]);
+      await connection.query(sqlInsertDetail, [valuesForInsert]);
 
-    // 6. AUTO-KOREKSI (Hanya jika ada selisih)
-    if (selisihItems.length > 0) {
-      const nomorKoreksi = await generateNomorKoreksi(
-        connection,
-        user.cabang,
-        header.tanggal,
-      );
-
-      await connection.query(
-        "INSERT INTO tkor_hdr (kor_nomor, kor_tanggal, kor_ket, user_create, date_create) VALUES (?, ?, ?, ?, NOW())",
-        [
-          nomorKoreksi,
+      // 6. AUTO-KOREKSI (Hanya jika ada selisih)
+      if (selisihItems.length > 0) {
+        const nomorKoreksi = await generateNomorKoreksi(
+          connection,
+          user.cabang,
           header.tanggal,
-          `AUTO-KOR TERIMA RETUR ${nomorTerima}`,
-          user.kode,
-        ],
-      );
+        );
 
-      const koreksiValues = selisihItems.map((s) => [
-        nomorKoreksi,
-        s.kode,
-        s.ukuran,
-        Number(s.jumlahKirim), // kord_stok (jumlah yang seharusnya)
-        Number(s.jumlahTerima), // kord_jumlah (jumlah fisik diterima)
-        Number(s.jumlahTerima) - Number(s.jumlahKirim), // kord_selisih
-        "Selisih Terima Retur",
-      ]);
+        await connection.query(
+          "INSERT INTO tkor_hdr (kor_nomor, kor_tanggal, kor_ket, user_create, date_create) VALUES (?, ?, ?, ?, NOW())",
+          [
+            nomorKoreksi,
+            header.tanggal,
+            `AUTO-KOR TERIMA RETUR ${nomorTerima}`,
+            user.kode,
+          ],
+        );
 
-      const sqlInsertKoreksi = `
+        const koreksiValues = selisihItems.map((s) => [
+          nomorKoreksi,
+          s.kode,
+          s.ukuran,
+          Number(s.jumlahKirim), // kord_stok (jumlah yang seharusnya)
+          Number(s.jumlahTerima), // kord_jumlah (jumlah fisik diterima)
+          Number(s.jumlahTerima) - Number(s.jumlahKirim), // kord_selisih
+          "Selisih Terima Retur",
+        ]);
+
+        const sqlInsertKoreksi = `
         INSERT INTO tkor_dtl 
         (kord_kor_nomor, kord_kode, kord_ukuran, kord_stok, kord_jumlah, kord_selisih, kord_ket) 
         VALUES ?
       `;
 
-      await connection.query(sqlInsertKoreksi, [koreksiValues]);
+        await connection.query(sqlInsertKoreksi, [koreksiValues]);
 
-      // Update referensi koreksi di header
-      await connection.query(
-        "UPDATE tdcrb_hdr SET rb_koreksi = ? WHERE rb_nomor = ?",
-        [nomorKoreksi, nomorTerima],
-      );
+        // Update referensi koreksi di header
+        await connection.query(
+          "UPDATE tdcrb_hdr SET rb_koreksi = ? WHERE rb_nomor = ?",
+          [nomorKoreksi, nomorTerima],
+        );
+      }
+
+      await connection.commit();
+      return res.json({
+        success: true,
+        message: `Berhasil disimpan: ${nomorTerima}`,
+      });
+    } catch (error) {
+      await connection.rollback();
+
+      // Jika errornya duplikat nomor, coba lagi
+      if (error.code === "ER_DUP_ENTRY" && retries > 1) {
+        console.log(
+          `⚠️ Nomor bentrok, mencoba ulang... sisa jatah: ${retries - 1}`,
+        );
+        retries--;
+        connection.release(); // Lepas koneksi sebelum loop ulang
+        continue;
+      }
+
+      console.error("❌ ERROR SIMPAN RETUR:", error);
+      res.status(500).json({ success: false, message: error.message });
+      retries = 0; // Hentikan loop
+    } finally {
+      if (!connection._fatalError) connection.release();
     }
-
-    await connection.commit();
-    res.json({
-      success: true,
-      message: `Berhasil disimpan dengan nomor: ${nomorTerima}`,
-    });
-  } catch (error) {
-    await connection.rollback();
-    console.error("❌ ERROR SIMPAN RETUR:", error);
-    res.status(500).json({ success: false, message: error.message });
-  } finally {
-    connection.release();
   }
 };
 
