@@ -11,7 +11,7 @@ router.use(authenticateToken);
 router.get("/search", controller.searchRetur);
 
 // 2. Load detail retur berdasarkan nomor
-router.get("/:nomorRb", controller.loadDetail);
+router.get("/load/:nomorRb", controller.loadDetail);
 
 // 3. Simpan final (Langsung tembak ke sini)
 router.post("/", controller.saveTerima);
