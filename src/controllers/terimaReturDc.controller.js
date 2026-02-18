@@ -33,15 +33,31 @@ const searchRetur = async (req, res) => {
   try {
     const { term = "" } = req.query;
     const query = `
-      SELECT h.rb_nomor as nomor, h.rb_tanggal as tanggal, g.gdg_nama as gudang_asal
+      SELECT 
+        h.rb_nomor as nomor, 
+        h.rb_tanggal as tanggal, 
+        g.gdg_nama as gudang_asal,
+        h.rb_noterima -- Kita ambil untuk pengecekan log
       FROM trbdc_hdr h
       LEFT JOIN tgudang g ON g.gdg_kode = LEFT(h.rb_nomor, 3)
-      WHERE h.rb_noterima IS NULL AND (h.rb_nomor LIKE ? OR g.gdg_nama LIKE ?)
-      ORDER BY h.rb_tanggal DESC LIMIT 20
+      WHERE 
+        -- FIX: Cek NULL atau string kosong
+        (h.rb_noterima IS NULL OR h.rb_noterima = '') 
+        AND (h.rb_nomor LIKE ? OR g.gdg_nama LIKE ?)
+      ORDER BY h.rb_tanggal DESC 
+      LIMIT 50
     `;
+
     const [rows] = await pool.query(query, [`%${term}%`, `%${term}%`]);
+
+    // Log untuk debug di console terminal backend
+    console.log(
+      `[DEBUG] Found ${rows.length} pending returns for term: "${term}"`,
+    );
+
     res.json({ success: true, data: rows });
   } catch (error) {
+    console.error("[ERROR] searchRetur:", error);
     res.status(500).json({ message: error.message });
   }
 };
