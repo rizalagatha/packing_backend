@@ -143,31 +143,29 @@ const saveTerima = async (req, res) => {
     );
 
     // 5. BULK INSERT DETAIL (tdcrb_dtl)
-    // Pakai awalan Cabang + User + Timestamp agar UNIK 100%
-    const idRecHeader = `${user.cabang}RB${Date.now()}`;
-
     const valuesForInsert = items.map((it, index) => {
       const urutan = String(index + 1).padStart(3, "0");
-      const iddrec = `${idRecHeader}.${urutan}`;
 
-      // Cek selisih untuk koreksi
+      // rbd_iddrec (Contoh: KDC.RB.2602.0001.001) -> Total 20 karakter, aman di VARCHAR(30)
+      const iddrec = `${nomorTerima}.${urutan}`;
+
       if (Number(it.jumlahTerima) !== Number(it.jumlahKirim)) {
         selisihItems.push(it);
       }
 
       return [
-        idRecHeader, // rbd_idrec
-        iddrec, // rbd_iddrec
-        nomorTerima, // rbd_nomor
-        it.kode, // rbd_kode
-        it.ukuran, // rbd_ukuran
-        Number(it.jumlahTerima), // rbd_jumlah
+        iddrec, // Kolom 1: rbd_iddrec
+        nomorTerima, // Kolom 2: rbd_nomor
+        it.kode, // Kolom 3: rbd_kode
+        it.ukuran, // Kolom 4: rbd_ukuran
+        Number(it.jumlahTerima), // Kolom 5: rbd_jumlah
       ];
     });
 
+    // 2. Eksekusi Bulk Insert
     const sqlInsertDetail = `
       INSERT INTO tdcrb_dtl 
-      (rbd_idrec, rbd_iddrec, rbd_nomor, rbd_kode, rbd_ukuran, rbd_jumlah) 
+      (rbd_iddrec, rbd_nomor, rbd_kode, rbd_ukuran, rbd_jumlah) 
       VALUES ?
     `;
 
