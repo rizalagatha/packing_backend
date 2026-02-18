@@ -117,16 +117,17 @@ const saveTerima = async (req, res) => {
     const { header, items } = req.body;
     const user = req.user;
 
-    // 1. LOG UNTUK DEBUG (Cek di terminal CMD/Nodemon)
     console.log("--- PROSES SIMPAN FINAL RETUR ---");
     console.log("Nomor RB Asal:", header.nomorRb);
-    console.log("Jumlah Item:", items.length);
 
     if (!items || items.length === 0) {
       throw new Error("Tidak ada item yang diterima.");
     }
 
-    // 2. Generate Nomor Terima (KDC.RB...)
+    // 1. Inisialisasi selisihItems (WAJIB ADA BIAR GAK ERROR)
+    const selisihItems = [];
+
+    // 2. Generate Nomor Terima
     const nomorTerima = await generateNomorTerima(connection, header.tanggal);
 
     // 3. Simpan Header (tdcrb_hdr)
@@ -141,38 +142,45 @@ const saveTerima = async (req, res) => {
       [nomorTerima, header.nomorRb],
     );
 
-    // 5. BULK INSERT DETAIL (tdcrb_dtl) -
-    // Teknik ini jauh lebih cepat daripada looping query satu-satu
-    const selisihItems = [];
-    const valuesForInsert = items.map((it, index) => {
-      // Buat ID detail yang unik (Contoh: KDC.RB.2602.0001.001)
-      const iddrec = `${nomorTerima}.${String(index + 1).padStart(3, "0")}`;
+    // 5. BULK INSERT DETAIL (tdcrb_dtl)
+    // Pakai awalan Cabang + User + Timestamp agar UNIK 100%
+    const idRecHeader = `${user.cabang}RB${Date.now()}`;
 
-      // Catat selisih untuk auto-koreksi nanti
+    const valuesForInsert = items.map((it, index) => {
+      const urutan = String(index + 1).padStart(3, "0");
+      const iddrec = `${idRecHeader}.${urutan}`;
+
+      // Cek selisih untuk koreksi
       if (Number(it.jumlahTerima) !== Number(it.jumlahKirim)) {
         selisihItems.push(it);
       }
 
       return [
+        idRecHeader, // rbd_idrec
         iddrec, // rbd_iddrec
         nomorTerima, // rbd_nomor
         it.kode, // rbd_kode
         it.ukuran, // rbd_ukuran
-        it.jumlahTerima, // rbd_jumlah
+        Number(it.jumlahTerima), // rbd_jumlah
       ];
     });
 
-    await connection.query(
-      "INSERT INTO tdcrb_dtl (rbd_iddrec, rbd_nomor, rbd_kode, rbd_ukuran, rbd_jumlah) VALUES ?",
-      [valuesForInsert], // Data dikirim sebagai array of array
-    );
+    const sqlInsertDetail = `
+      INSERT INTO tdcrb_dtl 
+      (rbd_idrec, rbd_iddrec, rbd_nomor, rbd_kode, rbd_ukuran, rbd_jumlah) 
+      VALUES ?
+    `;
+
+    await connection.query(sqlInsertDetail, [valuesForInsert]);
 
     // 6. AUTO-KOREKSI (Hanya jika ada selisih)
     if (selisihItems.length > 0) {
       const nomorKoreksi = await generateNomorKoreksi(
         connection,
+        user.cabang,
         header.tanggal,
       );
+
       await connection.query(
         "INSERT INTO tkor_hdr (kor_nomor, kor_tanggal, kor_ket, user_create, date_create) VALUES (?, ?, ?, ?, NOW())",
         [
@@ -187,17 +195,21 @@ const saveTerima = async (req, res) => {
         nomorKoreksi,
         s.kode,
         s.ukuran,
-        s.jumlahKirim,
-        s.jumlahTerima,
-        Number(s.jumlahTerima) - Number(s.jumlahKirim),
+        Number(s.jumlahKirim), // kord_stok (jumlah yang seharusnya)
+        Number(s.jumlahTerima), // kord_jumlah (jumlah fisik diterima)
+        Number(s.jumlahTerima) - Number(s.jumlahKirim), // kord_selisih
         "Selisih Terima Retur",
       ]);
 
-      await connection.query(
-        "INSERT INTO tkor_dtl (kord_kor_nomor, kord_kode, kord_ukuran, kord_stok, kord_jumlah, kord_selisih, kord_ket) VALUES ?",
-        [koreksiValues],
-      );
+      const sqlInsertKoreksi = `
+        INSERT INTO tkor_dtl 
+        (kord_kor_nomor, kord_kode, kord_ukuran, kord_stok, kord_jumlah, kord_selisih, kord_ket) 
+        VALUES ?
+      `;
 
+      await connection.query(sqlInsertKoreksi, [koreksiValues]);
+
+      // Update referensi koreksi di header
       await connection.query(
         "UPDATE tdcrb_hdr SET rb_koreksi = ? WHERE rb_nomor = ?",
         [nomorKoreksi, nomorTerima],
@@ -205,14 +217,13 @@ const saveTerima = async (req, res) => {
     }
 
     await connection.commit();
-    console.log("✅ SIMPAN BERHASIL:", nomorTerima);
     res.json({
       success: true,
       message: `Berhasil disimpan dengan nomor: ${nomorTerima}`,
     });
   } catch (error) {
     await connection.rollback();
-    console.error("❌ ERROR SIMPAN RETUR:", error.message); //
+    console.error("❌ ERROR SIMPAN RETUR:", error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     connection.release();
