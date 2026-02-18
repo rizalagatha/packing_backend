@@ -14,6 +14,6 @@ router.get("/search", controller.searchRetur);
 router.get("/load/:nomorRb", controller.loadDetail);
 
 // 3. Simpan final (Langsung tembak ke sini)
-router.post("/", controller.saveTerima);
+router.post("/save", controller.saveTerima);
 
 module.exports = router;
