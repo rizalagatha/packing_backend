@@ -95,6 +95,9 @@ app.use("/api/ambil-barang-form", ambilBarangRoutes);
 const bazarRoutes = require("./src/routes/bazar.routes");
 app.use("/api/bazar", bazarRoutes);
 
+const terimaReturDcRoutes = require("./src/routes/terimaReturDc.routes");
+app.use("/api/terima-retur-dc", terimaReturDcRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.use((err, req, res, next) => {
