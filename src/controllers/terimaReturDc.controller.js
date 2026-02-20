@@ -150,7 +150,7 @@ const loadDetail = async (req, res) => {
 
     // Ambil Header
     const [headerRows] = await pool.query(
-      "SELECT rb_nomor, rb_tanggal, rb_ket, g.gdg_nama FROM trbdc_hdr h LEFT JOIN tgudang g ON g.gdg_kode = LEFT(h.rb_nomor, 3) WHERE rb_nomor = ?",
+      "SELECT h.rb_nomor, h.rb_tanggal, h.rb_ket, g.gdg_nama, g.gdg_kode FROM trbdc_hdr h LEFT JOIN tgudang g ON g.gdg_kode = LEFT(h.rb_nomor, 3) WHERE h.rb_nomor = ?",
       [nomorRb],
     );
 
@@ -161,6 +161,7 @@ const loadDetail = async (req, res) => {
           nomorRb: headerRows[0].rb_nomor,
           tanggalRb: headerRows[0].rb_tanggal,
           gudangAsalNama: headerRows[0].gdg_nama,
+          gudangAsalKode: headerRows[0].gdg_kode,
           keterangan: headerRows[0].rb_ket,
         },
         items: rows, // 'rows' sudah mengandung 'jumlahTerima' dari SQL
