@@ -119,42 +119,34 @@ const loadDetail = async (req, res) => {
   try {
     const { nomorRb } = req.params;
 
-    // Query Utama Item Kirim
-    const queryItems = `
+    // Gabungkan data KIRIM (trbdc_dtl) dengan data PENDING (tdcrb_dtl_pending) di SQL
+    const query = `
       SELECT 
-        d.rbd_kode AS kode, b.brgd_barcode AS barcode, d.rbd_ukuran AS ukuran, d.rbd_jumlah AS jumlahKirim,
+        d.rbd_kode AS kode, 
+        b.brgd_barcode AS barcode, 
+        d.rbd_ukuran AS ukuran, 
+        d.rbd_jumlah AS jumlahKirim,
+        IFNULL(p.rbp_jumlah, 0) AS jumlahTerima, -- AMBIL DATA PENDING DI SINI
         TRIM(CONCAT_WS(" ", a.brg_jeniskaos, a.brg_tipe, a.brg_warna)) AS nama
       FROM trbdc_dtl d
+      LEFT JOIN tdcrb_dtl_pending p ON 
+        p.rbp_nomor_asal = d.rbd_nomor AND 
+        p.rbp_kode = d.rbd_kode AND 
+        p.rbp_ukuran = d.rbd_ukuran
       LEFT JOIN tbarangdc a ON a.brg_kode = d.rbd_kode
       LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = d.rbd_kode AND b.brgd_ukuran = d.rbd_ukuran
       WHERE d.rbd_nomor = ?
     `;
 
-    // Query Cek Data Pending
-    const queryPending = `SELECT rbp_kode, rbp_ukuran, rbp_jumlah FROM tdcrb_dtl_pending WHERE rbp_nomor_asal = ?`;
+    const [rows] = await pool.query(query, [nomorRb]);
+    if (rows.length === 0)
+      return res.status(404).json({ message: "Data tidak ditemukan" });
 
-    const [itemsRows] = await pool.query(queryItems, [nomorRb]);
-    const [pendingRows] = await pool.query(queryPending, [nomorRb]);
-
-    // Header (Ambil dari trbdc_hdr)
+    // Ambil Header
     const [headerRows] = await pool.query(
       "SELECT rb_nomor, rb_tanggal, rb_ket, g.gdg_nama FROM trbdc_hdr h LEFT JOIN tgudang g ON g.gdg_kode = LEFT(h.rb_nomor, 3) WHERE rb_nomor = ?",
       [nomorRb],
     );
-
-    if (headerRows.length === 0)
-      return res.status(404).json({ message: "Data tidak ditemukan" });
-
-    // Mapping: Gabungkan data kirim dengan data pending
-    const items = itemsRows.map((it) => {
-      const pnd = pendingRows.find(
-        (p) => p.rbp_kode === it.kode && p.rbp_ukuran === it.ukuran,
-      );
-      return {
-        ...it,
-        jumlahTerima: pnd ? pnd.rbp_jumlah : 0, // Jika ada pending, pakai angkanya. Jika tidak, 0.
-      };
-    });
 
     res.json({
       success: true,
@@ -165,7 +157,7 @@ const loadDetail = async (req, res) => {
           gudangAsalNama: headerRows[0].gdg_nama,
           keterangan: headerRows[0].rb_ket,
         },
-        items,
+        items: rows, // 'rows' sudah mengandung 'jumlahTerima' dari SQL
       },
     });
   } catch (error) {
