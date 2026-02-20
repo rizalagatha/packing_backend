@@ -2,13 +2,13 @@ const pool = require("../config/database");
 
 // --- Helper: Generate Nomor Dokumen Terima (KDC.RB.YYMM.XXXX) ---
 const generateNomorTerima = async (connection, tanggal) => {
-  const yearMonth = new Date(tanggal)
-    .toISOString()
-    .slice(2, 7)
-    .replace("-", "");
-  const prefix = `KDC.RB.${yearMonth}.`; // Hasil: KDC.RB.2602.
+  // Gunakan safety check
+  const validDate =
+    tanggal && !isNaN(Date.parse(tanggal)) ? new Date(tanggal) : new Date();
 
-  // Gunakan LIKE supaya lebih fleksibel nyarinya
+  const yearMonth = validDate.toISOString().slice(2, 7).replace("-", "");
+  const prefix = `KDC.RB.${yearMonth}.`;
+
   const query = `
     SELECT IFNULL(MAX(CAST(RIGHT(rb_nomor, 4) AS UNSIGNED)), 0) + 1 AS next_num 
     FROM tdcrb_hdr 
@@ -22,12 +22,15 @@ const generateNomorTerima = async (connection, tanggal) => {
 };
 
 // --- Helper: Generate Nomor Koreksi (KDC.KOR.YYMM.XXXX) ---
-const generateNomorKoreksi = async (connection, tanggal) => {
-  const yearMonth = new Date(tanggal)
-    .toISOString()
-    .slice(2, 7)
-    .replace("-", "");
-  const prefix = `KDC.KOR.${yearMonth}.`;
+const generateNomorKoreksi = async (connection, cabang, tanggal) => {
+  // Pastikan tanggal ada isinya, kalau kosong pakai hari ini
+  const validDate = tanggal ? new Date(tanggal) : new Date();
+
+  const yearMonth = validDate.toISOString().slice(2, 7).replace("-", "");
+
+  // Gunakan variabel 'cabang' agar prefixnya dinamis (misal: KDC.KOR...)
+  const prefix = `${cabang}.KOR.${yearMonth}.`;
+
   const [rows] = await connection.query(
     "SELECT IFNULL(MAX(RIGHT(kor_nomor, 4)), 0) + 1 AS next_num FROM tkor_hdr WHERE LEFT(kor_nomor, 12) = ?",
     [prefix],
