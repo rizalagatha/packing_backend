@@ -127,7 +127,13 @@ const loadDetail = async (req, res) => {
         d.rbd_ukuran AS ukuran, 
         d.rbd_jumlah AS jumlahKirim,
         IFNULL(p.rbp_jumlah, 0) AS jumlahTerima, -- AMBIL DATA PENDING DI SINI
-        TRIM(CONCAT_WS(" ", a.brg_jeniskaos, a.brg_tipe, a.brg_warna)) AS nama
+        TRIM(CONCAT_WS(" ", 
+          a.brg_jeniskaos, 
+          a.brg_tipe, 
+          a.brg_lengan, 
+          a.brg_jeniskain, 
+          a.brg_warna
+        )) AS nama
       FROM trbdc_dtl d
       LEFT JOIN tdcrb_dtl_pending p ON 
         p.rbp_nomor_asal = d.rbd_nomor AND 
