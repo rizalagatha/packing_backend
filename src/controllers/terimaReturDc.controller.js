@@ -69,47 +69,105 @@ const searchRetur = async (req, res) => {
   }
 };
 
+// --- 1. Fungsi Simpan Pending ---
+const savePending = async (req, res) => {
+  const connection = await pool.getConnection();
+  await connection.beginTransaction();
+  try {
+    const { header, items } = req.body;
+    const user = req.user;
+
+    // Hapus pending lama untuk nomor ini
+    await connection.query(
+      "DELETE FROM tdcrb_dtl_pending WHERE rbp_nomor_asal = ?",
+      [header.nomorRb],
+    );
+
+    // Masukkan progres scan terbaru
+    const pendingValues = items
+      .filter((it) => it.jumlahTerima > 0) // Hanya simpan yang sudah di-scan
+      .map((it) => [
+        header.nomorRb,
+        it.kode,
+        it.ukuran,
+        it.jumlahTerima,
+        user.kode,
+      ]);
+
+    if (pendingValues.length > 0) {
+      await connection.query(
+        "INSERT INTO tdcrb_dtl_pending (rbp_nomor_asal, rbp_kode, rbp_ukuran, rbp_jumlah, user_create) VALUES ?",
+        [pendingValues],
+      );
+    }
+
+    await connection.commit();
+    res.json({
+      success: true,
+      message: "Progres scan berhasil disimpan (Pending).",
+    });
+  } catch (error) {
+    await connection.rollback();
+    res.status(500).json({ message: error.message });
+  } finally {
+    connection.release();
+  }
+};
+
 // 2. Muat Detail Item dari Dokumen Retur Store
 const loadDetail = async (req, res) => {
   try {
     const { nomorRb } = req.params;
-    const query = `
+
+    // Query Utama Item Kirim
+    const queryItems = `
       SELECT 
-        h.rb_nomor, h.rb_tanggal, h.rb_ket,
-        LEFT(h.rb_nomor, 3) AS gudangAsalKode,
-        g.gdg_nama AS gudangAsalNama,
-        d.rbd_kode AS kode,
-        b.brgd_barcode AS barcode,
-        TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS nama,
-        d.rbd_ukuran AS ukuran,
-        d.rbd_jumlah AS jumlahKirim
-      FROM trbdc_hdr h
-      INNER JOIN trbdc_dtl d ON d.rbd_nomor = h.rb_nomor
+        d.rbd_kode AS kode, b.brgd_barcode AS barcode, d.rbd_ukuran AS ukuran, d.rbd_jumlah AS jumlahKirim,
+        TRIM(CONCAT_WS(" ", a.brg_jeniskaos, a.brg_tipe, a.brg_warna)) AS nama
+      FROM trbdc_dtl d
       LEFT JOIN tbarangdc a ON a.brg_kode = d.rbd_kode
       LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = d.rbd_kode AND b.brgd_ukuran = d.rbd_ukuran
-      LEFT JOIN tgudang g ON g.gdg_kode = LEFT(h.rb_nomor, 3)
-      WHERE h.rb_nomor = ?
+      WHERE d.rbd_nomor = ?
     `;
-    const [rows] = await pool.query(query, [nomorRb]);
-    if (rows.length === 0)
+
+    // Query Cek Data Pending
+    const queryPending = `SELECT rbp_kode, rbp_ukuran, rbp_jumlah FROM tdcrb_dtl_pending WHERE rbp_nomor_asal = ?`;
+
+    const [itemsRows] = await pool.query(queryItems, [nomorRb]);
+    const [pendingRows] = await pool.query(queryPending, [nomorRb]);
+
+    // Header (Ambil dari trbdc_hdr)
+    const [headerRows] = await pool.query(
+      "SELECT rb_nomor, rb_tanggal, rb_ket, g.gdg_nama FROM trbdc_hdr h LEFT JOIN tgudang g ON g.gdg_kode = LEFT(h.rb_nomor, 3) WHERE rb_nomor = ?",
+      [nomorRb],
+    );
+
+    if (headerRows.length === 0)
       return res.status(404).json({ message: "Data tidak ditemukan" });
 
-    const header = {
-      nomorRb: rows[0].rb_nomor,
-      tanggalRb: rows[0].rb_tanggal,
-      gudangAsalKode: rows[0].gudangAsalKode,
-      gudangAsalNama: rows[0].gudangAsalNama,
-      keterangan: rows[0].rb_ket,
-    };
-    const items = rows.map((r) => ({
-      kode: r.kode,
-      barcode: r.barcode,
-      nama: r.nama,
-      ukuran: r.ukuran,
-      jumlahKirim: r.jumlahKirim,
-    }));
+    // Mapping: Gabungkan data kirim dengan data pending
+    const items = itemsRows.map((it) => {
+      const pnd = pendingRows.find(
+        (p) => p.rbp_kode === it.kode && p.rbp_ukuran === it.ukuran,
+      );
+      return {
+        ...it,
+        jumlahTerima: pnd ? pnd.rbp_jumlah : 0, // Jika ada pending, pakai angkanya. Jika tidak, 0.
+      };
+    });
 
-    res.json({ success: true, data: { header, items } });
+    res.json({
+      success: true,
+      data: {
+        header: {
+          nomorRb: headerRows[0].rb_nomor,
+          tanggalRb: headerRows[0].rb_tanggal,
+          gudangAsalNama: headerRows[0].gdg_nama,
+          keterangan: headerRows[0].rb_ket,
+        },
+        items,
+      },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -224,6 +282,11 @@ const saveTerima = async (req, res) => {
         );
       }
 
+      await connection.query(
+        "DELETE FROM tdcrb_dtl_pending WHERE rbp_nomor_asal = ?",
+        [header.nomorRb],
+      );
+
       await connection.commit();
       return res.json({
         success: true,
@@ -251,4 +314,4 @@ const saveTerima = async (req, res) => {
   }
 };
 
-module.exports = { searchRetur, loadDetail, saveTerima };
+module.exports = { searchRetur, loadDetail, saveTerima, savePending };

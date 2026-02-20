@@ -10,6 +10,8 @@ router.use(authenticateToken);
 // 1. Pencarian tetap ada
 router.get("/search", controller.searchRetur);
 
+router.post("/pending", controller.savePending);
+
 // 2. Load detail retur berdasarkan nomor
 router.get("/load/:nomorRb", controller.loadDetail);
 
