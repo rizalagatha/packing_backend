@@ -84,6 +84,7 @@ const createRequest = async (req, res) => {
         authId: String(authNomor),
       };
 
+      // (Di dalam block try FCM createRequest)
       if (
         o_jenis === "AMBIL_BARANG" &&
         o_cab_tujuan &&
@@ -91,8 +92,48 @@ const createRequest = async (req, res) => {
       ) {
         const targetTopic = `approval_${o_cab_tujuan}`;
         await fcmService.sendToTopic(targetTopic, title, body, dataPayload);
+      } else if (String(o_jenis).trim() === "TRANSFER_SOP") {
+        const targetTopic = `user_RIO`; // Asumsi ada topic/token untuk Rio
+        await fcmService.sendToTopic(targetTopic, title, body, dataPayload);
       } else {
-        // ... logika kirim ke manager (Haris/Darul)
+        // --- LOGIKA KIRIM KE MANAGER ---
+        const today = new Date();
+        const isEstuManagerPeriod =
+          today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
+        const isPeminjaman = String(o_jenis).trim() === "PEMINJAMAN_BARANG";
+        const isKlaimPettyCash = String(o_jenis).trim() === "KLAIM_PETTYCASH"; // [TAMBAH INI]
+
+        let managerCodes = ["DARUL"]; // Darul selalu dikirim
+
+        if (isPeminjaman || isKlaimPettyCash) {
+          if (!managerCodes.includes("ESTU")) managerCodes.push("ESTU");
+        }
+
+        if (isEstuManagerPeriod) {
+          if (!managerCodes.includes("ESTU")) managerCodes.push("ESTU");
+        } else {
+          // HARIS TIDAK MENDAPATKAN PEMINJAMAN & KLAIM PETTY CASH
+          if (!isPeminjaman && !isKlaimPettyCash) {
+            managerCodes.push("HARIS");
+          }
+        }
+
+        const [managers] = await pool.query(
+          `SELECT DISTINCT user_fcm_token FROM tuser WHERE user_kode IN (?) AND user_fcm_token IS NOT NULL AND user_fcm_token != ''`,
+          [managerCodes],
+        );
+
+        if (managers.length > 0) {
+          const sendPromises = managers.map((mgr) =>
+            fcmService.sendNotification(
+              mgr.user_fcm_token,
+              title,
+              body,
+              dataPayload,
+            ),
+          );
+          await Promise.all(sendPromises);
+        }
       }
     } catch (fcmError) {
       console.error("[FCM Error] Ignored:", fcmError.message);
@@ -156,23 +197,22 @@ const getPendingRequests = async (req, res) => {
     if (user.cabang === "KDC") {
       if (userKodeUpper === "ESTU") {
         query += isEstuManagerPeriod
-          ? "AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis = 'PEMINJAMAN_BARANG')"
-          : "AND o_jenis = 'PEMINJAMAN_BARANG'";
+          ? " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH'))"
+          : " AND o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH')";
       } else if (userKodeUpper === "HARIS") {
         query += isEstuManagerPeriod
-          ? "AND 1=0"
-          : "AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC')";
+          ? " AND 1=0"
+          : " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC') AND o_jenis NOT IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH')";
       } else if (userKodeUpper === "RIO") {
-        // --- TAMBAHKAN INI ---
-        // Rio di KDC hanya boleh melihat TRANSFER_SOP
-        query += "AND o_jenis = 'TRANSFER_SOP'";
+        query += " AND o_jenis = 'TRANSFER_SOP'";
       } else {
         query +=
-          "AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis = 'PEMINJAMAN_BARANG')";
+          " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH'))";
       }
     } else {
+      // INI ADALAH ELSE YANG BENAR UNTUK CABANG SELAIN KDC (TOKO)
       query +=
-        "AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))";
+        " AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))";
       params.push(user.cabang, user.cabang);
     }
 
@@ -232,14 +272,15 @@ const processRequest = async (req, res) => {
     // B. Proteksi ESTU:
     if (userKodeUpper === "ESTU") {
       const isPeminjaman = o_jenis === "PEMINJAMAN_BARANG";
+      const isKlaimPettyCash = o_jenis === "KLAIM_PETTYCASH"; // [TAMBAH INI]
 
-      // Estu hanya boleh approve jika itu PEMINJAMAN_BARANG
+      // Estu boleh approve jika itu PEMINJAMAN_BARANG atau KLAIM_PETTYCASH
       // ATAU jika sedang masuk periode manager (12-16 Jan)
-      if (!isPeminjaman && !isEstuManagerPeriod) {
+      if (!isPeminjaman && !isKlaimPettyCash && !isEstuManagerPeriod) {
         return res.status(403).json({
           success: false,
           message:
-            "Anda hanya berwenang untuk otorisasi Peminjaman Barang di luar periode 12-16 Jan.",
+            "Anda hanya berwenang untuk otorisasi Peminjaman Barang dan Klaim Petty Cash di luar periode 12-16 Jan.",
         });
       }
     }
