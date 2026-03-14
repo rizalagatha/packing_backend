@@ -27,8 +27,14 @@ const loadStbjData = async (req, res) => {
         d.stbjd_size AS ukuran, 
         d.stbjd_jumlah AS jumlahKirim,
         d.stbjd_packing, 
-        TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)) AS nama,
-        dtl.brgd_barcode as barcode
+        COALESCE(
+          TRIM(CONCAT(brg.brg_jeniskaos, ' ', brg.brg_tipe, ' ', brg.brg_lengan, ' ', brg.brg_jeniskain, ' ', brg.brg_warna)),
+          (SELECT packd_brg_kaosan FROM tpacking_dtl pd WHERE pd.packd_pack_nomor = d.stbjd_packing AND pd.size = d.stbjd_size LIMIT 1)
+        ) AS nama,
+        COALESCE(
+          dtl.brgd_barcode,
+          (SELECT packd_barcode FROM tpacking_dtl pd WHERE pd.packd_pack_nomor = d.stbjd_packing AND pd.size = d.stbjd_size LIMIT 1)
+        ) AS barcode
       FROM kencanaprint.tstbj_dtl d
       LEFT JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
       LEFT JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
@@ -112,7 +118,7 @@ const getPackingDetailForChecker = async (req, res) => {
       // Try to find similar
       const [similar] = await pool.query(
         "SELECT DISTINCT packd_pack_nomor FROM tpacking_dtl WHERE packd_pack_nomor LIKE ? LIMIT 5",
-        [`%${nomor}%`]
+        [`%${nomor}%`],
       );
       console.log("Similar packing numbers:", similar);
 
@@ -147,7 +153,7 @@ const onCheck = async (req, res) => {
   try {
     await pool.query(
       "UPDATE kencanaprint.tstbj_hdr SET stbj_checker = 'Y', user_modified = ?, date_modified = NOW() WHERE stbj_nomor = ?",
-      [user.kode, stbj_nomor]
+      [user.kode, stbj_nomor],
     );
     res
       .status(200)
