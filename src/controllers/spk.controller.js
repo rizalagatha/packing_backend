@@ -10,8 +10,8 @@ const findSpkByBarcode = async (req, res) => {
             d.spk_tanggal,
             c.spkd_qtyorder AS qty_order
         FROM tbarangdc_dtl b 
-          LEFT JOIN tspk_dc c ON b.brgd_kode = c.spkd_kode
-          LEFT JOIN tspk d ON c.spkd_nomor = d.spk_nomor
+          LEFT JOIN kencanaprint.tspk_dc c ON b.brgd_kode = c.spkd_kode
+          LEFT JOIN kencanaprint.tspk d ON c.spkd_nomor = d.spk_nomor
         WHERE b.brgd_barcode = ?
         ORDER BY spk_tanggal DESC;
     `;

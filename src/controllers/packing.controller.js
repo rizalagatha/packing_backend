@@ -67,7 +67,7 @@ const createPacking = async (req, res) => {
     };
     await connection.query(
       "INSERT INTO tpacking (pack_nomor, pack_tanggal, pack_spk_nomor, pack_user_kode, pack_status, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
-      [pack_nomor, pack_tanggal, spk_nomor, user_kode, 1]
+      [pack_nomor, pack_tanggal, spk_nomor, user_kode, 1],
     );
 
     // 3. Siapkan dan simpan data detail ke tpacking_dtl
@@ -80,7 +80,7 @@ const createPacking = async (req, res) => {
     ]);
     await connection.query(
       "INSERT INTO tpacking_dtl (packd_pack_nomor, packd_barcode, packd_qty, packd_brg_kaosan, size) VALUES ?",
-      [packingDetails]
+      [packingDetails],
     );
 
     // Jika semua query berhasil, commit transaksi
@@ -141,7 +141,7 @@ const getPackingHistory = async (req, res) => {
     // Query untuk total data
     const [countRows] = await pool.query(
       `SELECT COUNT(*) as total ${baseQuery} ${whereQuery}`,
-      params
+      params,
     );
     const totalItems = countRows[0].total;
 
@@ -193,9 +193,9 @@ const getPackingDetail = async (req, res) => {
           spk.spk_nama AS pack_nama_spk,
           spk.spk_nomor_po AS nomor_po
        FROM tpacking p
-       LEFT JOIN tspk spk ON p.pack_spk_nomor = spk.spk_nomor
+       LEFT JOIN kencanaprint.tspk spk ON p.pack_spk_nomor = spk.spk_nomor
        WHERE p.pack_nomor = ?`,
-      [nomor]
+      [nomor],
     );
 
     if (headerRows.length === 0) {
@@ -216,7 +216,7 @@ const getPackingDetail = async (req, res) => {
              LEFT JOIN tbarangdc_dtl bd ON d.packd_barcode = bd.brgd_barcode
              LEFT JOIN tbarangdc b ON bd.brgd_kode = b.brg_kode
              WHERE d.packd_pack_nomor = ?`,
-      [nomor]
+      [nomor],
     );
 
     // 3. Query BARU untuk membuat string "DETAIL UKURAN" secara otomatis
@@ -229,7 +229,7 @@ const getPackingDetail = async (req, res) => {
                  WHERE packd_pack_nomor = ?
                  GROUP BY size
              ) AS subquery`,
-      [nomor]
+      [nomor],
     );
 
     // 4. Gabungkan hasil query ukuran ke dalam data header
@@ -281,13 +281,13 @@ const deletePacking = async (req, res) => {
     // 1. Hapus dari tabel detail (child) terlebih dahulu
     await connection.query(
       "DELETE FROM tpacking_dtl WHERE packd_pack_nomor = ?",
-      [nomor]
+      [nomor],
     );
 
     // 2. Hapus dari tabel header (parent)
     const [deleteHeaderResult] = await connection.query(
       "DELETE FROM tpacking WHERE pack_nomor = ?",
-      [nomor]
+      [nomor],
     );
 
     // Cek apakah ada data yang benar-benar dihapus
@@ -329,7 +329,7 @@ const updatePacking = async (req, res) => {
     // 1. Hapus semua detail packing yang lama
     await connection.query(
       "DELETE FROM tpacking_dtl WHERE packd_pack_nomor = ?",
-      [nomor]
+      [nomor],
     );
 
     // 2. Masukkan kembali item yang sudah dikoreksi
@@ -351,7 +351,7 @@ const updatePacking = async (req, res) => {
     // 3. Update header
     await connection.query(
       "UPDATE tpacking SET user_modified = ?, date_modified = NOW() WHERE pack_nomor = ?",
-      [user.kode, nomor]
+      [user.kode, nomor],
     );
 
     await connection.commit();

@@ -62,7 +62,7 @@ const findByBarcode = async (req, res) => {
         spk.spkd_kode,
         spk.spkd_ukuran,
         d.brgd_barcode
-      FROM tspk_dc spk
+      FROM kencanaprint.tspk_dc spk
       LEFT JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode 
                                 AND d.brgd_ukuran = spk.spkd_ukuran
       WHERE spk.spkd_nomor = ?
@@ -79,7 +79,7 @@ const findByBarcode = async (req, res) => {
         spk.spkd_kode,
         spk.spkd_ukuran,
         d.brgd_barcode
-      FROM tspk_dc spk
+      FROM kencanaprint.tspk_dc spk
       JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode 
                            AND d.brgd_ukuran = spk.spkd_ukuran
       WHERE d.brgd_barcode = ? 
@@ -107,7 +107,7 @@ const findByBarcode = async (req, res) => {
         spk.spkd_nomor,
         spk.spkd_kode,
         spk.spkd_ukuran
-      FROM tspk_dc spk
+      FROM kencanaprint.tspk_dc spk
       JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode 
                            AND d.brgd_ukuran = spk.spkd_ukuran
       WHERE d.brgd_barcode = ? 
