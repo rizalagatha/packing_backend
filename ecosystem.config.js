@@ -20,7 +20,7 @@ module.exports = {
         DB_USER: "root",
         DB_PASSWORD: "Kencana#123",
         DB_DATABASE: "retail",
-        DB_PORT: 3307,
+        DB_PORT: 3306,
         JWT_SECRET: "s+qG0PB3JQB/jHABdHfVejMBUm9zJtE4Mb1GHMAYXsw=",
       },
     },
@@ -44,7 +44,7 @@ module.exports = {
         DB_USER: "root",
         DB_PASSWORD: "Kencana#123",
         DB_DATABASE: "retailnew", // DATABASE BERBEDA
-        DB_PORT: 3307,
+        DB_PORT: 3306,
         JWT_SECRET: "s+qG0PB3JQB/jHABdHfVejMBUm9zJtE4Mb1GHMAYXsw=",
       },
     },
