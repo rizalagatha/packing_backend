@@ -36,7 +36,7 @@ const loadStbjData = async (req, res) => {
           (SELECT packd_barcode FROM tpacking_dtl pd WHERE pd.packd_pack_nomor = d.stbjd_packing AND pd.size = d.stbjd_size LIMIT 1)
         ) AS barcode
       FROM kencanaprint.tstbj_dtl d
-      LEFT JOIN tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
+      LEFT JOIN kencanaprint.tspk_dc spk ON d.stbjd_spk_nomor = spk.spkd_nomor
       LEFT JOIN tbarangdc brg ON spk.spkd_kode = brg.brg_kode
       LEFT JOIN tbarangdc_dtl dtl ON brg.brg_kode = dtl.brgd_kode AND d.stbjd_size = dtl.brgd_ukuran
       WHERE d.stbjd_stbj_nomor = ?
