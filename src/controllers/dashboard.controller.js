@@ -404,55 +404,37 @@ const getBranchPerformance = async (req, res) => {
     /* ===============================
        6. FINAL QUERY
     =============================== */
+    /* ===============================
+       6. FINAL QUERY (FIXED VERSION)
+    =============================== */
     const finalQuery = `
       WITH MonthlySales AS (
-
         SELECT
-          x.cabang,
+          LEFT(h.inv_nomor,3) AS cabang,
           SUM(ROUND(x.nominal_raw,0)) AS nominal
-
         FROM (
-
           SELECT
-            LEFT(h.inv_nomor,3) AS cabang,
-
+            h.inv_nomor,
             (
               SELECT
                 SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon))
-                - hh.inv_disc
-                + hh.inv_ppn / 100 *
+                - COALESCE(h.inv_disc, 0)
+                + (COALESCE(h.inv_ppn, 0) / 100) *
                   (
                     SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon))
-                    - hh.inv_disc
+                    - COALESCE(h.inv_disc, 0)
                   )
-
+              -- KITA CUKUP AMBIL DTL SAJA, KARENA HDR SUDAH ADA DI LUAR
               FROM tinv_dtl dd
-              LEFT JOIN tinv_hdr hh
-                ON hh.inv_nomor = dd.invd_inv_nomor
-
-              WHERE hh.inv_nomor = h.inv_nomor
+              WHERE dd.invd_inv_nomor = h.inv_nomor
             ) AS nominal_raw
-
           FROM tinv_hdr h
-
           WHERE h.inv_sts_pro = 0
-
-            AND h.inv_tanggal >= DATE_FORMAT(
-                  CONVERT_TZ(NOW(),'+00:00','+07:00'),
-                  '%Y-%m-01'
-                )
-
-            AND h.inv_tanggal < DATE_ADD(
-                  DATE_FORMAT(
-                    CONVERT_TZ(NOW(),'+00:00','+07:00'),
-                    '%Y-%m-01'
-                  ),
-                  INTERVAL 1 MONTH
-                )
-
+            -- SEDERHANAKAN DATE LOGIC AGAR AMAN DI LOCAL MAUPUN SERVER
+            AND h.inv_tanggal >= DATE_FORMAT(NOW(), '%Y-%m-01')
+            AND h.inv_tanggal < DATE_ADD(DATE_FORMAT(NOW(), '%Y-%m-01'), INTERVAL 1 MONTH)
         ) x
-
-        GROUP BY x.cabang
+        GROUP BY LEFT(x.inv_nomor,3)
       ),
 
       MonthlyTargets AS (
@@ -460,23 +442,21 @@ const getBranchPerformance = async (req, res) => {
           kode_gudang AS cabang,
           SUM(target_omset) AS target
         FROM kpi.ttarget_kaosan
-        WHERE tahun = YEAR(CONVERT_TZ(NOW(),'+00:00','+07:00'))
-          AND bulan = MONTH(CONVERT_TZ(NOW(),'+00:00','+07:00'))
+        WHERE tahun = YEAR(NOW())
+          AND bulan = MONTH(NOW())
         GROUP BY cabang
       ),
 
       MonthlyReturns AS (
         SELECT
           rh.rj_cab AS cabang,
-
           SUM(
             CASE
-
               WHEN rh.rj_jenis = 'N' THEN (
                 SELECT GREATEST(0,
-                  IFNULL(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)),0)
+                  COALESCE(SUM(rd.rjd_jumlah * (rd.rjd_harga - rd.rjd_diskon)),0)
                   -
-                  IFNULL((
+                  COALESCE((
                     SELECT SUM(inv_rj_rp)
                     FROM tinv_hdr
                     WHERE inv_rj_nomor = rh.rj_nomor
@@ -485,32 +465,17 @@ const getBranchPerformance = async (req, res) => {
                 FROM trj_dtl rd
                 WHERE rd.rjd_nomor = rh.rj_nomor
               )
-
               WHEN rh.rj_jenis = 'Y' THEN (
-                SELECT IFNULL(SUM(rfd_refund),0)
+                SELECT COALESCE(SUM(rfd_refund),0)
                 FROM trefund_dtl
                 WHERE rfd_notrs = rh.rj_inv
               )
-
               ELSE 0
             END
           ) AS total_retur
-
         FROM trj_hdr rh
-
-        WHERE rh.date_create >= DATE_FORMAT(
-              CONVERT_TZ(NOW(),'+00:00','+07:00'),
-              '%Y-%m-01'
-            )
-
-        AND rh.date_create < DATE_ADD(
-              DATE_FORMAT(
-                CONVERT_TZ(NOW(),'+00:00','+07:00'),
-                '%Y-%m-01'
-              ),
-              INTERVAL 1 MONTH
-            )
-
+        WHERE rh.date_create >= DATE_FORMAT(NOW(), '%Y-%m-01')
+          AND rh.date_create < DATE_ADD(DATE_FORMAT(NOW(), '%Y-%m-01'), INTERVAL 1 MONTH)
         GROUP BY rh.rj_cab
       ),
 
@@ -518,29 +483,16 @@ const getBranchPerformance = async (req, res) => {
         SELECT
           inv_cab AS cabang,
           SUM(COALESCE(inv_mp_biaya_platform,0)) AS total_fee
-
         FROM tinv_hdr
-
-        WHERE date_create >= DATE_FORMAT(
-              CONVERT_TZ(NOW(),'+00:00','+07:00'),
-              '%Y-%m-01'
-            )
-
-        AND date_create < DATE_ADD(
-              DATE_FORMAT(
-                CONVERT_TZ(NOW(),'+00:00','+07:00'),
-                '%Y-%m-01'
-              ),
-              INTERVAL 1 MONTH
-            )
-
+        WHERE date_create >= DATE_FORMAT(NOW(), '%Y-%m-01')
+          AND date_create < DATE_ADD(DATE_FORMAT(NOW(), '%Y-%m-01'), INTERVAL 1 MONTH)
         GROUP BY inv_cab
       )
 
       SELECT
         g.gdg_kode AS kode_cabang,
         g.gdg_nama AS nama_cabang,
-
+        
         (
           COALESCE(ms.nominal,0)
           - COALESCE(mr.total_retur,0)
@@ -562,15 +514,14 @@ const getBranchPerformance = async (req, res) => {
         END AS ach
 
       FROM tgudang g
-
       LEFT JOIN MonthlySales ms ON g.gdg_kode = ms.cabang
       LEFT JOIN MonthlyTargets mt ON g.gdg_kode = mt.cabang
       LEFT JOIN MonthlyReturns mr ON g.gdg_kode = mr.cabang
       LEFT JOIN MonthlyFees mf ON g.gdg_kode = mf.cabang
-
+      
       WHERE (g.gdg_dc = 0 OR g.gdg_kode IN ('KPR','KON'))
         AND g.gdg_kode <> 'KDC'
-
+        
       ORDER BY ach DESC
     `;
 
