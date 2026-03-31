@@ -180,7 +180,7 @@ const getSalesTargetSummary = async (req, res) => {
 };
 
 // --- 4. PERFORMA CABANG (OPTIMALISASI UTAMA) ---
-// --- 4. PERFORMA CABANG (OPTIMALISASI UTAMA & ANTI-NULL) ---
+// --- 4. PERFORMA CABANG (OPTIMALISASI UTAMA, ANTI-NULL & FIX TIMEZONE) ---
 const getBranchPerformance = async (req, res) => {
   const user = req.user;
 
@@ -189,10 +189,6 @@ const getBranchPerformance = async (req, res) => {
   }
 
   try {
-    console.log("\n==============================");
-    console.log("🔍 BRANCH PERFORMANCE DEBUG");
-    console.log("==============================");
-
     const finalQuery = `
       WITH MonthlySales AS (
         SELECT
@@ -209,9 +205,9 @@ const getBranchPerformance = async (req, res) => {
           ) AS nominal
         FROM tinv_hdr h
         WHERE h.inv_sts_pro = 0
-          -- Filter Bulan & Tahun yang Jauh Lebih Aman
-          AND YEAR(h.inv_tanggal) = YEAR(CONVERT_TZ(NOW(),'+00:00','+07:00'))
-          AND MONTH(h.inv_tanggal) = MONTH(CONVERT_TZ(NOW(),'+00:00','+07:00'))
+          -- FIX ZONA WAKTU: Cukup pakai NOW() tanpa CONVERT_TZ
+          AND YEAR(h.inv_tanggal) = YEAR(NOW())
+          AND MONTH(h.inv_tanggal) = MONTH(NOW())
         GROUP BY h.inv_cab
       ),
 
@@ -220,8 +216,8 @@ const getBranchPerformance = async (req, res) => {
           kode_gudang AS cabang,
           SUM(target_omset) AS target
         FROM kpi.ttarget_kaosan
-        WHERE tahun = YEAR(CONVERT_TZ(NOW(),'+00:00','+07:00'))
-          AND bulan = MONTH(CONVERT_TZ(NOW(),'+00:00','+07:00'))
+        WHERE tahun = YEAR(NOW())
+          AND bulan = MONTH(NOW())
         GROUP BY cabang
       ),
 
@@ -248,8 +244,8 @@ const getBranchPerformance = async (req, res) => {
             END
           ) AS total_retur
         FROM trj_hdr rh
-        WHERE YEAR(rh.date_create) = YEAR(CONVERT_TZ(NOW(),'+00:00','+07:00'))
-          AND MONTH(rh.date_create) = MONTH(CONVERT_TZ(NOW(),'+00:00','+07:00'))
+        WHERE YEAR(rh.date_create) = YEAR(NOW())
+          AND MONTH(rh.date_create) = MONTH(NOW())
         GROUP BY rh.rj_cab
       ),
 
@@ -258,8 +254,8 @@ const getBranchPerformance = async (req, res) => {
           inv_cab AS cabang,
           SUM(COALESCE(inv_mp_biaya_platform, 0)) AS total_fee
         FROM tinv_hdr
-        WHERE YEAR(date_create) = YEAR(CONVERT_TZ(NOW(),'+00:00','+07:00'))
-          AND MONTH(date_create) = MONTH(CONVERT_TZ(NOW(),'+00:00','+07:00'))
+        WHERE YEAR(date_create) = YEAR(NOW())
+          AND MONTH(date_create) = MONTH(NOW())
         GROUP BY inv_cab
       )
 
@@ -299,12 +295,6 @@ const getBranchPerformance = async (req, res) => {
     `;
 
     const [rows] = await pool.query(finalQuery);
-
-    console.log("🏁 FINAL RESULT:");
-    console.table(rows);
-    console.log("✅ DEBUG END");
-    console.log("==============================\n");
-
     return res.json(rows);
   } catch (err) {
     console.error("❌ BRANCH PERFORMANCE ERROR:", err);
