@@ -16,7 +16,7 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: 3000,
-        DB_HOST: "localhost",
+        DB_HOST: "103.94.238.252",
         DB_USER: "root",
         DB_PASSWORD: "Kencana#123",
         DB_DATABASE: "retail",
@@ -40,7 +40,7 @@ module.exports = {
       env: {
         NODE_ENV: "production", // Tetap production agar efisien
         PORT: 3002, // PORT BERBEDA
-        DB_HOST: "localhost",
+        DB_HOST: "103.94.238.252",
         DB_USER: "root",
         DB_PASSWORD: "Kencana#123",
         DB_DATABASE: "retailnew", // DATABASE BERBEDA
