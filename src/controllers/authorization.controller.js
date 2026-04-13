@@ -182,7 +182,7 @@ const checkStatus = async (req, res) => {
   }
 };
 
-// 3. [MANAGER] List pending requests (Sudah ada di kode Anda)
+// 3. [MANAGER] List pending requests
 const getPendingRequests = async (req, res) => {
   try {
     const user = req.user;
@@ -191,36 +191,55 @@ const getPendingRequests = async (req, res) => {
     const isEstuManagerPeriod =
       today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
 
+    // [PERBAIKAN]: Base Query
     let query = "SELECT * FROM totorisasi WHERE o_status = 'P' ";
     let params = [];
 
     if (user.cabang === "KDC") {
+      // LOGIKA UNTUK ORANG-ORANG PUSAT (KDC)
+
       if (userKodeUpper === "ESTU") {
-        query += isEstuManagerPeriod
-          ? " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH'))"
-          : " AND o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH')";
+        if (isEstuManagerPeriod) {
+          // Estu jadi Manager Sementara (Lihat semua transaksi KDC + Hak miliknya)
+          query +=
+            " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH', 'SUBMIT_BAP'))";
+        } else {
+          // Estu Mode Normal (Hanya lihat hak miliknya)
+          query +=
+            " AND o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH', 'SUBMIT_BAP')";
+        }
       } else if (userKodeUpper === "HARIS") {
-        query += isEstuManagerPeriod
-          ? " AND 1=0"
-          : " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC') AND o_jenis NOT IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH')";
+        if (isEstuManagerPeriod) {
+          // Haris Libur
+          query += " AND 1=0";
+        } else {
+          // Haris Mode Normal (Kecualikan milik Estu dan Rio)
+          query +=
+            " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC') AND o_jenis NOT IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH', 'SUBMIT_BAP', 'TRANSFER_SOP')";
+        }
       } else if (userKodeUpper === "RIO") {
+        // Rio hanya lihat Transfer SOP
         query += " AND o_jenis = 'TRANSFER_SOP'";
       } else {
-        query +=
-          " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH'))";
+        // Manager KDC lainnya (Darul dll) - Lihat semua KDC
+        query += " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC')";
       }
     } else {
-      // INI ADALAH ELSE YANG BENAR UNTUK CABANG SELAIN KDC (TOKO)
+      // LOGIKA UNTUK ORANG TOKO (Misal: K01 minta ke K02)
       query +=
         " AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))";
       params.push(user.cabang, user.cabang);
     }
 
     query += " ORDER BY o_created DESC";
+
     const [rows] = await pool.query(query, params);
     res.status(200).json({ success: true, data: rows || [] });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Gagal memuat data." });
+    console.error("Error getPendingRequests:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal memuat data otorisasi." });
   }
 };
 
@@ -272,15 +291,21 @@ const processRequest = async (req, res) => {
     // B. Proteksi ESTU:
     if (userKodeUpper === "ESTU") {
       const isPeminjaman = o_jenis === "PEMINJAMAN_BARANG";
-      const isKlaimPettyCash = o_jenis === "KLAIM_PETTYCASH"; // [TAMBAH INI]
+      const isKlaimPettyCash = o_jenis === "KLAIM_PETTYCASH";
+      const isSubmitBap = o_jenis === "SUBMIT_BAP"; // [TAMBAH INI]
 
-      // Estu boleh approve jika itu PEMINJAMAN_BARANG atau KLAIM_PETTYCASH
+      // Estu boleh approve jika itu PEMINJAMAN_BARANG, KLAIM_PETTYCASH, atau SUBMIT_BAP
       // ATAU jika sedang masuk periode manager (12-16 Jan)
-      if (!isPeminjaman && !isKlaimPettyCash && !isEstuManagerPeriod) {
+      if (
+        !isPeminjaman &&
+        !isKlaimPettyCash &&
+        !isSubmitBap &&
+        !isEstuManagerPeriod
+      ) {
         return res.status(403).json({
           success: false,
           message:
-            "Anda hanya berwenang untuk otorisasi Peminjaman Barang dan Klaim Petty Cash di luar periode 12-16 Jan.",
+            "Anda hanya berwenang untuk otorisasi Peminjaman Barang, Klaim Petty Cash, dan BAP di luar periode 12-16 Jan.",
         });
       }
     }
