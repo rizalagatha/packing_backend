@@ -350,6 +350,58 @@ const processRequest = async (req, res) => {
       });
     }
 
+    // =========================================================================
+    // [BARU] HOOK UNTUK MENG-ACC PETTY CASH SECARA OTOMATIS (DIRECT SQL)
+    // =========================================================================
+    const [authData] = await pool.query(
+      "SELECT o_transaksi, o_jenis FROM totorisasi WHERE o_nomor = ?",
+      [authNomor],
+    );
+
+    if (authData.length > 0) {
+      const { o_transaksi, o_jenis } = authData[0];
+
+      // Jika ini adalah Otorisasi Petty Cash (Klaim Kolektif)
+      if (o_jenis === "KLAIM_PETTYCASH" && o_transaksi) {
+        if (action === "APPROVE") {
+          // 1. Update Header PCK menjadi ACC
+          await pool.query(
+            `UPDATE tpettycash_klaim_hdr 
+                     SET pck_status = 'ACC', pck_acc = ?, date_acc = NOW(), user_modified = ?, date_modified = NOW() 
+                     WHERE pck_nomor = ? AND pck_status = 'SUBMITTED'`,
+            [approverName, approverName, o_transaksi],
+          );
+
+          // 2. Update Detail PC menjadi ACC
+          await pool.query(
+            `UPDATE tpettycash_hdr 
+                     SET pc_status = 'ACC', user_modified = ?, date_modified = NOW() 
+                     WHERE pck_nomor = ?`,
+            [approverName, o_transaksi],
+          );
+        } else if (action === "REJECT") {
+          const alasan = "Ditolak via Aplikasi HP";
+
+          // 1. Update Header PCK menjadi REJECTED
+          await pool.query(
+            `UPDATE tpettycash_klaim_hdr 
+                     SET pck_status = 'REJECTED', pck_keterangan = CONCAT(IFNULL(pck_keterangan, ''), '\n[Catatan Revisi]: ', ?), user_modified = ?, date_modified = NOW() 
+                     WHERE pck_nomor = ? AND pck_status = 'SUBMITTED'`,
+            [alasan, approverName, o_transaksi],
+          );
+
+          // 2. Update Detail PC menjadi REJECTED (Agar Kasir bisa edit ulang)
+          await pool.query(
+            `UPDATE tpettycash_hdr 
+                     SET pc_status = 'REJECTED', user_modified = ?, date_modified = NOW() 
+                     WHERE pck_nomor = ?`,
+            [approverName, o_transaksi],
+          );
+        }
+      }
+    }
+    // =========================================================================
+
     res.status(200).json({
       success: true,
       message: `Otorisasi berhasil di-${
