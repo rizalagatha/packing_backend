@@ -228,6 +228,13 @@ const getPendingRequests = async (req, res) => {
       // LOGIKA UNTUK ORANG TOKO (Misal: K01 minta ke K02)
       query +=
         " AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))";
+
+      // ================================================================================
+      // [PERBAIKAN KUNCI]: BLOKIR JENIS TRANSAKSI LEVEL MANAGER AGAR TIDAK TAMPIL DI TOKO!
+      // ================================================================================
+      query +=
+        " AND o_jenis NOT IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH', 'SUBMIT_BAP', 'TRANSFER_SOP')";
+
       params.push(user.cabang, user.cabang);
     }
 
