@@ -392,16 +392,16 @@ const processRequest = async (req, res) => {
           // 1. Update Header PCK menjadi REJECTED
           await pool.query(
             `UPDATE tpettycash_klaim_hdr 
-                     SET pck_status = 'REJECTED', pck_keterangan = CONCAT(IFNULL(pck_keterangan, ''), '\n[Catatan Revisi]: ', ?), user_modified = ?, date_modified = NOW() 
-                     WHERE pck_nomor = ? AND pck_status = 'SUBMITTED'`,
+             SET pck_status = 'REJECTED', pck_keterangan = CONCAT(IFNULL(pck_keterangan, ''), '\n[Catatan Revisi]: ', ?), user_modified = ?, date_modified = NOW() 
+             WHERE pck_nomor = ? AND pck_status = 'SUBMITTED'`,
             [alasan, approverName, o_transaksi],
           );
 
-          // 2. Update Detail PC menjadi REJECTED (Agar Kasir bisa edit ulang)
+          // 2. [PERBAIKAN KUNCI] Update Detail PC jadi REJECTED & LEPASKAN IKATAN PCK (NULL)
           await pool.query(
             `UPDATE tpettycash_hdr 
-                     SET pc_status = 'REJECTED', user_modified = ?, date_modified = NOW() 
-                     WHERE pck_nomor = ?`,
+             SET pc_status = 'REJECTED', pck_nomor = NULL, user_modified = ?, date_modified = NOW() 
+             WHERE pck_nomor = ?`,
             [approverName, o_transaksi],
           );
         }
