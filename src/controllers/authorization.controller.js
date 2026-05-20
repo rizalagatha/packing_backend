@@ -195,47 +195,53 @@ const getPendingRequests = async (req, res) => {
     let query = "SELECT * FROM totorisasi WHERE o_status = 'P' ";
     let params = [];
 
-    if (user.cabang === "KDC") {
-      // LOGIKA UNTUK ORANG-ORANG PUSAT (KDC)
+    const managerTypes = [
+      "PEMINJAMAN_BARANG",
+      "KLAIM_PETTYCASH",
+      "SUBMIT_BAP",
+      "TRANSFER_SOP",
+      "DISKON_FAKTUR",
+      "SO_TANPA_DP",
+      "BELUM_LUNAS",
+      "DISKON_ITEM",
+      "PIUTANG",
+    ];
 
+    if (user.cabang === "KDC") {
       if (userKodeUpper === "ESTU") {
         if (isEstuManagerPeriod) {
-          // Estu jadi Manager Sementara (Lihat semua transaksi KDC + Hak miliknya)
           query +=
-            " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH', 'SUBMIT_BAP'))";
+            " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis IN (?))";
         } else {
-          // Estu Mode Normal (Hanya lihat hak miliknya)
-          query +=
-            " AND o_jenis IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH', 'SUBMIT_BAP')";
+          query += " AND o_jenis IN (?)";
         }
+        params.push(["PEMINJAMAN_BARANG", "KLAIM_PETTYCASH", "SUBMIT_BAP"]);
       } else if (userKodeUpper === "HARIS") {
         if (isEstuManagerPeriod) {
-          // Haris Libur
           query += " AND 1=0";
         } else {
-          // Haris Mode Normal (Kecualikan milik Estu dan Rio)
           query +=
-            " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC') AND o_jenis NOT IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH', 'SUBMIT_BAP', 'TRANSFER_SOP')";
+            " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC') AND o_jenis NOT IN (?)";
+          params.push([
+            "PEMINJAMAN_BARANG",
+            "KLAIM_PETTYCASH",
+            "SUBMIT_BAP",
+            "TRANSFER_SOP",
+          ]);
         }
       } else if (userKodeUpper === "RIO") {
-        // Rio hanya lihat Transfer SOP
         query += " AND o_jenis = 'TRANSFER_SOP'";
       } else {
-        // Manager KDC lainnya (Darul dll) - Lihat semua KDC
-        query += " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC')";
+        query +=
+          " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis NOT IN ('TRANSFER_SOP'))";
       }
     } else {
-      // LOGIKA UNTUK ORANG TOKO (Misal: K01 minta ke K02)
       query +=
         " AND (o_target = ? OR (o_cab = ? AND (o_target IS NULL OR o_target = '')))";
 
-      // ================================================================================
-      // [PERBAIKAN KUNCI]: BLOKIR JENIS TRANSAKSI LEVEL MANAGER AGAR TIDAK TAMPIL DI TOKO!
-      // ================================================================================
-      query +=
-        " AND o_jenis NOT IN ('PEMINJAMAN_BARANG', 'KLAIM_PETTYCASH', 'SUBMIT_BAP', 'TRANSFER_SOP')";
-
-      params.push(user.cabang, user.cabang);
+      // [KUNCI DI SINI]: Buang mutlak seluruh tipe manager & diskon agar tidak mendarat di HP toko
+      query += " AND o_jenis NOT IN (?)";
+      params.push(user.cabang, user.cabang, managerTypes);
     }
 
     query += " ORDER BY o_created DESC";
@@ -256,24 +262,23 @@ const processRequest = async (req, res) => {
   const user = req.user;
 
   if (!authNomor || !["APPROVE", "REJECT"].includes(action)) {
-    return res.status(400).json({
-      success: false,
-      message: "Data proses tidak valid (Nomor atau Action salah).",
-    });
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: "Data proses tidak valid (Nomor atau Action salah).",
+      });
   }
 
   try {
-    // 1. AMBIL DETAIL JENIS REQUEST DULU
     const [checkRows] = await pool.query(
       "SELECT o_jenis FROM totorisasi WHERE o_nomor = ?",
       [authNomor],
     );
-
     if (checkRows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Data otorisasi tidak ditemukan.",
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: "Data otorisasi tidak ditemukan." });
     }
 
     const o_jenis = checkRows[0].o_jenis;
@@ -281,29 +286,26 @@ const processRequest = async (req, res) => {
     const today = new Date();
 
     // ══════════════════════════════════════════════════════════════════════════
-    // [BARU] PROTEKSI KEAMANAN: Store dilarang keras approve transaksi level manager
+    // [KUNCI EKSEKUSI]: Store dilarang keras memproses tipe manager / diskon_faktur!
     // ══════════════════════════════════════════════════════════════════════════
     const managerTypes = [
       "PEMINJAMAN_BARANG",
       "KLAIM_PETTYCASH",
       "SUBMIT_BAP",
       "TRANSFER_SOP",
+      "DISKON_FAKTUR",
     ];
     if (managerTypes.includes(o_jenis) && user.cabang !== "KDC") {
       return res.status(403).json({
         success: false,
         message:
-          "Akses Ditolak. Transaksi level Manager tidak boleh diproses oleh user Store.",
+          "Akses Ditolak. Otorisasi tipe ini memerlukan persetujuan dari Manager Pusat (KDC).",
       });
     }
 
-    // Periode Pengalihan: 12 Jan s/d 16 Jan 2026
     const isEstuManagerPeriod =
       today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
 
-    // 2. VALIDASI KEAMANAN BERDASARKAN ROLE & TANGGAL
-
-    // A. Proteksi HARIS: Dilarang approve apapun selama periode 12-16 Jan
     if (isEstuManagerPeriod && userKodeUpper === "HARIS") {
       return res.status(403).json({
         success: false,
@@ -312,14 +314,11 @@ const processRequest = async (req, res) => {
       });
     }
 
-    // B. Proteksi ESTU:
     if (userKodeUpper === "ESTU") {
       const isPeminjaman = o_jenis === "PEMINJAMAN_BARANG";
       const isKlaimPettyCash = o_jenis === "KLAIM_PETTYCASH";
-      const isSubmitBap = o_jenis === "SUBMIT_BAP"; // [TAMBAH INI]
+      const isSubmitBap = o_jenis === "SUBMIT_BAP";
 
-      // Estu boleh approve jika itu PEMINJAMAN_BARANG, KLAIM_PETTYCASH, atau SUBMIT_BAP
-      // ATAU jika sedang masuk periode manager (12-16 Jan)
       if (
         !isPeminjaman &&
         !isKlaimPettyCash &&
@@ -334,23 +333,24 @@ const processRequest = async (req, res) => {
       }
     }
 
-    // C. Proteksi RIO & Transfer SOP
     if (o_jenis === "TRANSFER_SOP" && userKodeUpper !== "RIO") {
-      return res.status(403).json({
-        success: false,
-        message: "Otorisasi Transfer SOP hanya boleh dilakukan oleh RIO.",
-      });
+      return res
+        .status(403)
+        .json({
+          success: false,
+          message: "Otorisasi Transfer SOP hanya boleh dilakukan oleh RIO.",
+        });
     }
 
-    // Tambahan: Pastikan Rio tidak bisa approve yang bukan haknya
     if (userKodeUpper === "RIO" && o_jenis !== "TRANSFER_SOP") {
-      return res.status(403).json({
-        success: false,
-        message: "Anda hanya berwenang untuk otorisasi Transfer SOP.",
-      });
+      return res
+        .status(403)
+        .json({
+          success: false,
+          message: "Anda hanya berwenang untuk otorisasi Transfer SOP.",
+        });
     }
 
-    // 3. EKSEKUSI UPDATE KE DATABASE
     const newStatus = action === "APPROVE" ? "Y" : "N";
     const approverName = user.kode || user.nama;
 
@@ -374,9 +374,6 @@ const processRequest = async (req, res) => {
       });
     }
 
-    // =========================================================================
-    // [BARU] HOOK UNTUK MENG-ACC PETTY CASH SECARA OTOMATIS (DIRECT SQL)
-    // =========================================================================
     const [authData] = await pool.query(
       "SELECT o_transaksi, o_jenis FROM totorisasi WHERE o_nomor = ?",
       [authNomor],
@@ -385,59 +382,44 @@ const processRequest = async (req, res) => {
     if (authData.length > 0) {
       const { o_transaksi, o_jenis } = authData[0];
 
-      // Jika ini adalah Otorisasi Petty Cash (Klaim Kolektif)
       if (o_jenis === "KLAIM_PETTYCASH" && o_transaksi) {
         if (action === "APPROVE") {
-          // 1. Update Header PCK menjadi ACC
           await pool.query(
-            `UPDATE tpettycash_klaim_hdr 
-                     SET pck_status = 'ACC', pck_acc = ?, date_acc = NOW(), user_modified = ?, date_modified = NOW() 
-                     WHERE pck_nomor = ? AND pck_status = 'SUBMITTED'`,
+            `UPDATE tpettycash_klaim_hdr SET pck_status = 'ACC', pck_acc = ?, date_acc = NOW(), user_modified = ?, date_modified = NOW() WHERE pck_nomor = ? AND pck_status = 'SUBMITTED'`,
             [approverName, approverName, o_transaksi],
           );
-
-          // 2. Update Detail PC menjadi ACC
           await pool.query(
-            `UPDATE tpettycash_hdr 
-                     SET pc_status = 'ACC', user_modified = ?, date_modified = NOW() 
-                     WHERE pck_nomor = ?`,
+            `UPDATE tpettycash_hdr SET pc_status = 'ACC', user_modified = ?, date_modified = NOW() WHERE pck_nomor = ?`,
             [approverName, o_transaksi],
           );
         } else if (action === "REJECT") {
           const alasan = "Ditolak via Aplikasi HP";
-
-          // 1. Update Header PCK menjadi REJECTED
           await pool.query(
-            `UPDATE tpettycash_klaim_hdr 
-             SET pck_status = 'REJECTED', pck_keterangan = CONCAT(IFNULL(pck_keterangan, ''), '\n[Catatan Revisi]: ', ?), user_modified = ?, date_modified = NOW() 
-             WHERE pck_nomor = ? AND pck_status = 'SUBMITTED'`,
+            `UPDATE tpettycash_klaim_hdr SET pck_status = 'REJECTED', pck_keterangan = CONCAT(IFNULL(pck_keterangan, ''), '\n[Catatan Revisi]: ', ?), user_modified = ?, date_modified = NOW() WHERE pck_nomor = ? AND pck_status = 'SUBMITTED'`,
             [alasan, approverName, o_transaksi],
           );
-
-          // 2. [PERBAIKAN KUNCI] Update Detail PC jadi REJECTED & LEPASKAN IKATAN PCK (NULL)
           await pool.query(
-            `UPDATE tpettycash_hdr 
-             SET pc_status = 'REJECTED', pck_nomor = NULL, user_modified = ?, date_modified = NOW() 
-             WHERE pck_nomor = ?`,
+            `UPDATE tpettycash_hdr SET pc_status = 'REJECTED', pck_nomor = NULL, user_modified = ?, date_modified = NOW() WHERE pck_nomor = ?`,
             [approverName, o_transaksi],
           );
         }
       }
     }
-    // =========================================================================
 
-    res.status(200).json({
-      success: true,
-      message: `Otorisasi berhasil di-${
-        action === "APPROVE" ? "setujui" : "tolak"
-      }.`,
-    });
+    res
+      .status(200)
+      .json({
+        success: true,
+        message: `Otorisasi berhasil di-${action === "APPROVE" ? "setujui" : "tolak"}.`,
+      });
   } catch (error) {
     console.error("Error processRequest:", error);
-    res.status(500).json({
-      success: false,
-      message: "Terjadi kesalahan saat memproses otorisasi.",
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Terjadi kesalahan saat memproses otorisasi.",
+      });
   }
 };
 
