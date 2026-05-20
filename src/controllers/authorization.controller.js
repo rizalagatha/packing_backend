@@ -280,6 +280,23 @@ const processRequest = async (req, res) => {
     const userKodeUpper = String(user.kode).toUpperCase();
     const today = new Date();
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // [BARU] PROTEKSI KEAMANAN: Store dilarang keras approve transaksi level manager
+    // ══════════════════════════════════════════════════════════════════════════
+    const managerTypes = [
+      "PEMINJAMAN_BARANG",
+      "KLAIM_PETTYCASH",
+      "SUBMIT_BAP",
+      "TRANSFER_SOP",
+    ];
+    if (managerTypes.includes(o_jenis) && user.cabang !== "KDC") {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Akses Ditolak. Transaksi level Manager tidak boleh diproses oleh user Store.",
+      });
+    }
+
     // Periode Pengalihan: 12 Jan s/d 16 Jan 2026
     const isEstuManagerPeriod =
       today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
