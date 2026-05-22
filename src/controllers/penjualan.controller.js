@@ -168,9 +168,10 @@ const savePenjualan = async (req, res) => {
     const pundiAmal = Number(payment.pundiAmal || 0);
     const bayarTunai = Number(payment.tunai || 0);
     const bayarTransfer = Number(payment.transfer?.nominal || 0);
+    const bayarQris = Number(payment.qris?.nominal || 0);
 
     // Hitung Kembalian Total sebelum Pundi Amal
-    const totalBayarInput = bayarTunai + bayarTransfer;
+    const totalBayarInput = bayarTunai + bayarTransfer + bayarQris;
     const kembalianTotal = Math.max(totalBayarInput - grandTotal, 0);
 
     // inv_rptunai (Tunai Bersih) = Tunai yang dibayarkan dikurangi kembalian (seperti di web)
@@ -189,6 +190,15 @@ const savePenjualan = async (req, res) => {
       );
     }
 
+    let nomorSetoranQris = ""; // <--- [BARU] GEN NOMOR SETORAN QRIS
+    if (bayarQris > 0) {
+      nomorSetoranQris = await generateNewSetorNumber(
+        connection,
+        targetCabang,
+        header.tanggal,
+      );
+    }
+
     // --- TAMBAHAN DARI WEB: Generate Setoran Tunai ---
     let nomorSetoranTunai = "";
     if (bayarTunaiBersih > 0) {
@@ -198,6 +208,8 @@ const savePenjualan = async (req, res) => {
         header.tanggal,
       );
     }
+
+    const totalNonTunai = bayarTransfer + bayarQris;
 
     // 5. INSERT tinv_hdr
     const headerSql = `
@@ -223,8 +235,8 @@ const savePenjualan = async (req, res) => {
       totalBayarInput, // inv_bayar (Total uang masuk)
       pundiAmal,
       bayarTunaiBersih, // inv_rptunai (Tunai Bersih)
-      bayarTransfer, // inv_rpcard
-      nomorSetoran, // inv_nosetor (Transfer)
+      totalNonTunai, // inv_rpcard
+      nomorSetoran || nomorSetoranQris, // inv_nosetor (Transfer)
       kembalianFinal, // inv_kembali
       user.kode,
     ]);
@@ -318,6 +330,22 @@ const savePenjualan = async (req, res) => {
       );
     }
 
+    // --- [BARU] Detail Kredit: Pembayaran QRIS ---
+    if (bayarQris > 0) {
+      await connection.query(
+        `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          `${targetCabang}QRS${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+          piutangNomor,
+          toSqlDateTime(header.tanggal),
+          "Pembayaran QRIS",
+          0,
+          bayarQris,
+          nomorSetoranQris,
+        ],
+      );
+    }
+
     // --- TAMBAHAN DARI WEB: INSERT tsetor (Setoran Tunai) ---
     if (bayarTunaiBersih > 0 && nomorSetoranTunai) {
       const idrecTunai = `${targetCabang}SH${format(new Date(), "yyyyMMddHHmmssSSS")}T`;
@@ -351,14 +379,12 @@ const savePenjualan = async (req, res) => {
       );
     }
 
-    // 8. INSERT tsetor (Jika Transfer) - Menyimpan Akun dan Rekening
+    // 9. INSERT tsetor (Jika Transfer)
     if (bayarTransfer > 0) {
       const idrecSetor = `${targetCabang}SH${format(
         new Date(),
         "yyyyMMddHHmmssSSS",
       )}`;
-
-      // Ambil info bank dari payment.transfer.akun
       const kodeBank = payment.transfer?.akun?.kode || "";
       const norekBank = payment.transfer?.akun?.rekening || "";
 
@@ -390,6 +416,47 @@ const savePenjualan = async (req, res) => {
           invNomor,
           bayarTransfer,
           `${targetCabang}KS${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+        ],
+      );
+    }
+
+    // --- [BARU] 10. INSERT tsetor (Jika QRIS) ---
+    if (bayarQris > 0) {
+      const idrecQris = `${targetCabang}QR${format(
+        new Date(),
+        "yyyyMMddHHmmssSSS",
+      )}`;
+      const kodeBankQris = payment.qris?.akun?.kode || "";
+      const norekBankQris = payment.qris?.akun?.rekening || "";
+
+      await connection.query(
+        `INSERT INTO tsetor_hdr (
+          sh_idrec, sh_nomor, sh_cus_kode, sh_tanggal, sh_jenis, 
+          sh_nominal, sh_akun, sh_norek, sh_tgltransfer, sh_otomatis, sh_ket, sh_cab, user_create, date_create
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 'Y', 'PEMBAYARAN QRIS KASIR', ?, ?, NOW())`,
+        [
+          idrecQris,
+          nomorSetoranQris,
+          customerKode,
+          toSqlDateTime(header.tanggal),
+          bayarQris,
+          kodeBankQris,
+          norekBankQris,
+          toSqlDateTime(header.tanggal),
+          targetCabang,
+          user.kode,
+        ],
+      );
+
+      await connection.query(
+        `INSERT INTO tsetor_dtl (sd_idrec, sd_sh_nomor, sd_tanggal, sd_inv, sd_bayar, sd_ket, sd_angsur, sd_nourut) VALUES (?, ?, ?, ?, ?, 'PEMBAYARAN QRIS KASIR', ?, 1)`,
+        [
+          `${targetCabang}QS${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+          nomorSetoranQris,
+          toSqlDateTime(header.tanggal),
+          invNomor,
+          bayarQris,
+          `${targetCabang}KQ${format(new Date(), "yyyyMMddHHmmssSSS")}`,
         ],
       );
     }
