@@ -195,8 +195,23 @@ const updateFcmToken = async (req, res) => {
   }
 };
 
+const logout = async (req, res) => {
+  try {
+    const userKode = req.user.kode;
+    // Hapus token di database agar notifikasi tidak masuk lagi
+    await pool.query(
+      "UPDATE tuser SET user_fcm_token = NULL WHERE user_kode = ?",
+      [userKode],
+    );
+    res.status(200).json({ success: true, message: "Token berhasil dihapus." });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Gagal logout." });
+  }
+};
+
 module.exports = {
   login,
   selectBranch,
   updateFcmToken,
+  logout,
 };

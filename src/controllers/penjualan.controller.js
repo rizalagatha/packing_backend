@@ -26,7 +26,7 @@ const generateNewSetorNumber = async (connection, cabang, tanggal) => {
   const prefix = `${cabang}.STR.${format(new Date(tanggal), "yyMM")}.`;
   const [rows] = await connection.query(
     `SELECT IFNULL(MAX(RIGHT(sh_nomor, 4)), 0) + 1 AS next_num FROM tsetor_hdr WHERE sh_nomor LIKE ?`,
-    [`${prefix}%`]
+    [`${prefix}%`],
   );
   return `${prefix}${rows[0].next_num.toString().padStart(4, "0")}`;
 };
@@ -36,7 +36,12 @@ const generateNewSetorNumber = async (connection, cabang, tanggal) => {
 const findProductByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
-    const { cabang } = req.user;
+    const { cabang: cabangOverride } = req.query; // Tangkap param cabang dari frontend
+    const userCabang = req.user.cabang;
+
+    // TENTUKAN CABANG YANG AKAN DICEK STOKNYA
+    // Jika frontend mengirim cabang (misal: 'K01' untuk Bazaar), gunakan itu.
+    const targetCabang = cabangOverride ? cabangOverride : userCabang;
 
     const query = `
             SELECT 
@@ -52,6 +57,7 @@ const findProductByBarcode = async (req, res) => {
                 IFNULL((
                     SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
                     FROM tmasterstok m 
+                    -- FIX: Cari stok berdasarkan targetCabang (K01 atau Cabang User)
                     WHERE m.mst_aktif='Y' AND m.mst_cab=? 
                     AND m.mst_brg_kode=d.brgd_kode AND m.mst_ukuran=d.brgd_ukuran
                 ), 0) AS stok
@@ -59,7 +65,7 @@ const findProductByBarcode = async (req, res) => {
             LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
             WHERE h.brg_aktif=0 AND h.brg_logstok <> 'N' AND d.brgd_barcode = ?
         `;
-    const [rows] = await pool.query(query, [cabang, barcode]);
+    const [rows] = await pool.query(query, [targetCabang, barcode]);
 
     if (rows.length === 0)
       return res
@@ -141,11 +147,16 @@ const savePenjualan = async (req, res) => {
       throw new Error("Data customer tidak valid (Kode kosong).");
     }
 
-    // 2. Inisialisasi Nomor dan ID
-    const invNomor = await generateNewInvNumber(user.cabang, header.tanggal);
+    // --- TENTUKAN CABANG TRANSAKSI (MENDUKUNG BAZAAR K01) ---
+    const targetCabang = header.cabang_override
+      ? header.cabang_override
+      : user.cabang;
+
+    // 2. Inisialisasi Nomor dan ID (Gunakan targetCabang)
+    const invNomor = await generateNewInvNumber(targetCabang, header.tanggal);
     const idrec =
       header.idrec ||
-      `${user.cabang}INV${format(new Date(), "yyyyMMddHHmmssSSS")}`;
+      `${targetCabang}INV${format(new Date(), "yyyyMMddHHmmssSSS")}`;
     const piutangNomor = `${customerKode}${invNomor}`;
 
     // 3. Perhitungan Nominal (Mengikuti Logika Web)
@@ -168,13 +179,23 @@ const savePenjualan = async (req, res) => {
     // inv_kembali (Kembalian Final) = Kembalian setelah dipotong pundi amal
     const kembalianFinal = Math.max(kembalianTotal - pundiAmal, 0);
 
-    // 4. Generate Nomor Setoran jika ada Transfer
+    // 4. Generate Nomor Setoran Transfer & Tunai
     let nomorSetoran = "";
     if (bayarTransfer > 0) {
       nomorSetoran = await generateNewSetorNumber(
         connection,
-        user.cabang,
-        header.tanggal
+        targetCabang,
+        header.tanggal,
+      );
+    }
+
+    // --- TAMBAHAN DARI WEB: Generate Setoran Tunai ---
+    let nomorSetoranTunai = "";
+    if (bayarTunaiBersih > 0) {
+      nomorSetoranTunai = await generateNewSetorNumber(
+        connection,
+        targetCabang,
+        header.tanggal,
       );
     }
 
@@ -192,7 +213,7 @@ const savePenjualan = async (req, res) => {
       idrec,
       invNomor,
       toSqlDate(header.tanggal),
-      user.cabang,
+      targetCabang, // <-- Pakai targetCabang (Agar masuk nota Bazaar K01 jika mode aktif)
       customerKode,
       header.customer.level_kode || "1",
       header.keterangan || "Penjualan Mobile",
@@ -203,15 +224,15 @@ const savePenjualan = async (req, res) => {
       pundiAmal,
       bayarTunaiBersih, // inv_rptunai (Tunai Bersih)
       bayarTransfer, // inv_rpcard
-      nomorSetoran, // inv_nosetor
+      nomorSetoran, // inv_nosetor (Transfer)
       kembalianFinal, // inv_kembali
       user.kode,
     ]);
 
-    // 6. INSERT tinv_dtl
+    // 6. INSERT tinv_dtl (Trigger Database akan otomatis memotong tmasterstok)
     const detailValues = items.map((item, index) => {
       const invdIdrec = `${invNomor.replace(/\./g, "")}${String(
-        index + 1
+        index + 1,
       ).padStart(3, "0")}`;
       return [
         invdIdrec,
@@ -233,12 +254,11 @@ const savePenjualan = async (req, res) => {
     if (detailValues.length > 0) {
       await connection.query(
         `INSERT INTO tinv_dtl (invd_idrec, invd_inv_nomor, invd_kode, invd_ukuran, invd_jumlah, invd_mstpesan, invd_mststok, invd_harga, invd_hpp, invd_disc, invd_diskon, invd_sd_nomor, invd_nourut) VALUES ?`,
-        [detailValues]
+        [detailValues],
       );
     }
 
     // 7. LOGIKA PIUTANG (tpiutang_hdr & tpiutang_dtl)
-    // Nominal Header Piutang = Total Invoice (Bottom-up)
     await connection.query(
       `INSERT INTO tpiutang_hdr (ph_nomor, ph_tanggal, ph_cus_kode, ph_inv_nomor, ph_top, ph_nominal, ph_cab) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -248,22 +268,22 @@ const savePenjualan = async (req, res) => {
         invNomor,
         0,
         grandTotal,
-        user.cabang,
-      ]
+        targetCabang,
+      ],
     );
 
     // Detail Debet: Penjualan
     await connection.query(
       `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
-        `${user.cabang}INV${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+        `${targetCabang}INV${format(new Date(), "yyyyMMddHHmmssSSS")}`,
         piutangNomor,
         toSqlDateTime(header.tanggal),
         "Penjualan",
         grandTotal,
         0,
         "",
-      ]
+      ],
     );
 
     // Detail Kredit: Pembayaran Tunai (Bersih)
@@ -271,14 +291,14 @@ const savePenjualan = async (req, res) => {
       await connection.query(
         `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
-          `${user.cabang}CASH${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+          `${targetCabang}CASH${format(new Date(), "yyyyMMddHHmmssSSS")}`,
           piutangNomor,
           toSqlDateTime(header.tanggal),
           "Bayar Tunai",
           0,
           bayarTunaiBersih,
-          "",
-        ]
+          nomorSetoranTunai || "", // <-- Catat no setoran tunai
+        ],
       );
     }
 
@@ -287,22 +307,55 @@ const savePenjualan = async (req, res) => {
       await connection.query(
         `INSERT INTO tpiutang_dtl (pd_sd_angsur, pd_ph_nomor, pd_tanggal, pd_uraian, pd_debet, pd_kredit, pd_ket) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
-          `${user.cabang}TRF${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+          `${targetCabang}TRF${format(new Date(), "yyyyMMddHHmmssSSS")}`,
           piutangNomor,
           toSqlDateTime(header.tanggal),
           "Bayar Transfer",
           0,
           bayarTransfer,
           nomorSetoran,
-        ]
+        ],
+      );
+    }
+
+    // --- TAMBAHAN DARI WEB: INSERT tsetor (Setoran Tunai) ---
+    if (bayarTunaiBersih > 0 && nomorSetoranTunai) {
+      const idrecTunai = `${targetCabang}SH${format(new Date(), "yyyyMMddHHmmssSSS")}T`;
+
+      await connection.query(
+        `INSERT INTO tsetor_hdr (
+          sh_idrec, sh_nomor, sh_cus_kode, sh_tanggal, sh_jenis, 
+          sh_nominal, sh_otomatis, sh_ket, sh_cab, user_create, date_create
+        ) VALUES (?, ?, ?, ?, 0, ?, 'Y', 'PEMBAYARAN TUNAI KASIR', ?, ?, NOW())`,
+        [
+          idrecTunai,
+          nomorSetoranTunai,
+          customerKode,
+          toSqlDateTime(header.tanggal),
+          bayarTunaiBersih,
+          targetCabang,
+          user.kode,
+        ],
+      );
+
+      await connection.query(
+        `INSERT INTO tsetor_dtl (sd_idrec, sd_sh_nomor, sd_tanggal, sd_inv, sd_bayar, sd_ket, sd_angsur, sd_nourut) VALUES (?, ?, ?, ?, ?, 'PEMBAYARAN TUNAI KASIR', ?, 1)`,
+        [
+          idrecTunai,
+          nomorSetoranTunai,
+          toSqlDateTime(header.tanggal),
+          invNomor,
+          bayarTunaiBersih,
+          `${targetCabang}CT${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+        ],
       );
     }
 
     // 8. INSERT tsetor (Jika Transfer) - Menyimpan Akun dan Rekening
     if (bayarTransfer > 0) {
-      const idrecSetor = `${user.cabang}SH${format(
+      const idrecSetor = `${targetCabang}SH${format(
         new Date(),
-        "yyyyMMddHHmmssSSS"
+        "yyyyMMddHHmmssSSS",
       )}`;
 
       // Ambil info bank dari payment.transfer.akun
@@ -312,8 +365,8 @@ const savePenjualan = async (req, res) => {
       await connection.query(
         `INSERT INTO tsetor_hdr (
           sh_idrec, sh_nomor, sh_cus_kode, sh_tanggal, sh_jenis, 
-          sh_nominal, sh_akun, sh_norek, sh_tgltransfer, sh_otomatis, user_create, date_create
-        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 'Y', ?, NOW())`,
+          sh_nominal, sh_akun, sh_norek, sh_tgltransfer, sh_otomatis, sh_cab, user_create, date_create
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 'Y', ?, ?, NOW())`,
         [
           idrecSetor,
           nomorSetoran,
@@ -323,31 +376,30 @@ const savePenjualan = async (req, res) => {
           kodeBank,
           norekBank,
           toSqlDateTime(header.tanggal),
+          targetCabang,
           user.kode,
-        ]
+        ],
       );
 
       await connection.query(
         `INSERT INTO tsetor_dtl (sd_idrec, sd_sh_nomor, sd_tanggal, sd_inv, sd_bayar, sd_ket, sd_angsur, sd_nourut) VALUES (?, ?, ?, ?, ?, 'PEMBAYARAN DARI KASIR MOBILE', ?, 1)`,
         [
-          `${user.cabang}SD${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+          `${targetCabang}SD${format(new Date(), "yyyyMMddHHmmssSSS")}`,
           nomorSetoran,
           toSqlDateTime(header.tanggal),
           invNomor,
           bayarTransfer,
-          `${user.cabang}KS${format(new Date(), "yyyyMMddHHmmssSSS")}`,
-        ]
+          `${targetCabang}KS${format(new Date(), "yyyyMMddHHmmssSSS")}`,
+        ],
       );
     }
 
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Penjualan ${invNomor} berhasil.`,
-        data: { nomor: invNomor },
-      });
+    res.status(201).json({
+      success: true,
+      message: `Penjualan ${invNomor} berhasil.`,
+      data: { nomor: invNomor },
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error savePenjualan:", error);
@@ -356,7 +408,6 @@ const savePenjualan = async (req, res) => {
     if (connection) connection.release();
   }
 };
-
 // 5. Get Active Promos
 const getActivePromos = async (req, res) => {
   try {
@@ -480,7 +531,7 @@ const sendReceiptWa = async (req, res) => {
        FROM tinv_hdr h 
        LEFT JOIN tgudang g ON g.gdg_kode = h.inv_cab 
        WHERE inv_nomor = ?`,
-      [nomor]
+      [nomor],
     );
     if (!rows.length)
       return res.status(404).json({ message: "Invoice not found" });
@@ -494,7 +545,7 @@ const sendReceiptWa = async (req, res) => {
        FROM tinv_dtl d 
        LEFT JOIN tbarangdc b ON b.brg_kode = d.invd_kode 
        WHERE invd_inv_nomor = ?`,
-      [nomor]
+      [nomor],
     );
 
     // Helper Formatting
@@ -540,7 +591,7 @@ const sendReceiptWa = async (req, res) => {
     if (hdr.inv_disc > 0) {
       message += `Diskon     : ${padLeft(
         "-" + formatRupiah(hdr.inv_disc),
-        17
+        17,
       )}\n`;
     }
     message += `Grand Total: ${padLeft(formatRupiah(grandTotal), 17)}\n`;
@@ -558,7 +609,7 @@ const sendReceiptWa = async (req, res) => {
     const result = await whatsappService.sendMessageFromClient(
       cabang,
       cleanHp,
-      message
+      message,
     );
 
     if (result.success) {
@@ -601,12 +652,10 @@ const sendReceiptWaImage = async (req, res) => {
       // VALIDASI DETIL
       if (!file) {
         console.error("[UPLOAD FAIL] File kosong");
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "File gambar tidak terbaca di server.",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "File gambar tidak terbaca di server.",
+        });
       }
       if (!hp) {
         console.error("[UPLOAD FAIL] Nomor HP kosong");
@@ -626,7 +675,7 @@ const sendReceiptWaImage = async (req, res) => {
         cabang,
         cleanHp,
         file.buffer,
-        caption || "Struk Belanja"
+        caption || "Struk Belanja",
       );
 
       if (result.success) {

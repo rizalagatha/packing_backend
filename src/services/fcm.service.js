@@ -4,7 +4,7 @@ const sendNotificationToDevice = async (
   fcmToken,
   title,
   body,
-  dataPayload = {}
+  dataPayload = {},
 ) => {
   if (!fcmToken) return;
 
@@ -32,7 +32,7 @@ const sendNotificationToDevice = async (
     const response = await admin.messaging().send(message);
     console.log(
       `[FCM] Notif terkirim ke ${fcmToken.substr(0, 10)}...:`,
-      response
+      response,
     );
     return true;
   } catch (error) {

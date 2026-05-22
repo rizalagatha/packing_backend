@@ -262,12 +262,10 @@ const processRequest = async (req, res) => {
   const user = req.user;
 
   if (!authNomor || !["APPROVE", "REJECT"].includes(action)) {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message: "Data proses tidak valid (Nomor atau Action salah).",
-      });
+    return res.status(400).json({
+      success: false,
+      message: "Data proses tidak valid (Nomor atau Action salah).",
+    });
   }
 
   try {
@@ -334,21 +332,17 @@ const processRequest = async (req, res) => {
     }
 
     if (o_jenis === "TRANSFER_SOP" && userKodeUpper !== "RIO") {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message: "Otorisasi Transfer SOP hanya boleh dilakukan oleh RIO.",
-        });
+      return res.status(403).json({
+        success: false,
+        message: "Otorisasi Transfer SOP hanya boleh dilakukan oleh RIO.",
+      });
     }
 
     if (userKodeUpper === "RIO" && o_jenis !== "TRANSFER_SOP") {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message: "Anda hanya berwenang untuk otorisasi Transfer SOP.",
-        });
+      return res.status(403).json({
+        success: false,
+        message: "Anda hanya berwenang untuk otorisasi Transfer SOP.",
+      });
     }
 
     const newStatus = action === "APPROVE" ? "Y" : "N";
@@ -406,20 +400,16 @@ const processRequest = async (req, res) => {
       }
     }
 
-    res
-      .status(200)
-      .json({
-        success: true,
-        message: `Otorisasi berhasil di-${action === "APPROVE" ? "setujui" : "tolak"}.`,
-      });
+    res.status(200).json({
+      success: true,
+      message: `Otorisasi berhasil di-${action === "APPROVE" ? "setujui" : "tolak"}.`,
+    });
   } catch (error) {
     console.error("Error processRequest:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Terjadi kesalahan saat memproses otorisasi.",
-      });
+    res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan saat memproses otorisasi.",
+    });
   }
 };
 

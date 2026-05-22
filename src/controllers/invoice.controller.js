@@ -31,7 +31,6 @@ const getCabangList = async (req, res) => {
 const getList = async (req, res) => {
   try {
     // Ambil filter dari query params
-    // NEW: Tambahkan page & limit
     const {
       startDate,
       endDate,
@@ -40,6 +39,7 @@ const getList = async (req, res) => {
       page = 1,
       limit = 20,
       search,
+      isBazaar,
     } = req.query;
 
     const params = [startDate, endDate];
@@ -49,6 +49,14 @@ const getList = async (req, res) => {
     if (cabang && cabang !== "KDC") {
       cabangFilter = " AND h.inv_cab = ?";
       params.push(cabang);
+    }
+
+    if (isBazaar === "Y") {
+      // Jika tab Bazaar diklik, HANYA tampilkan yang keterangannya Bazaar
+      cabangFilter += " AND h.inv_ket LIKE '%Bazaar%'";
+    } else if (isBazaar === "N") {
+      // Jika tab Toko Reguler diklik, SEMBUNYIKAN yang keterangannya Bazaar
+      cabangFilter += " AND h.inv_ket NOT LIKE '%Bazaar%'";
     }
 
     // Filter Status (Sisa Piutang / Belum Lunas)

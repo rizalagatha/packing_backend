@@ -19,4 +19,6 @@ router.post("/select-branch", authController.selectBranch);
 // [FIX] Pasang middleware hanya di rute yang butuh login
 router.put("/fcm-token", authenticateToken, authController.updateFcmToken);
 
+router.post("/logout", authenticateToken, authController.logout);
+
 module.exports = router;

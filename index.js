@@ -18,6 +18,8 @@ app.use(cors()); // Mengizinkan akses dari domain lain (Cross-Origin Resource Sh
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+app.use("/public", express.static("public"));
+
 // 5. Rute Dasar (untuk tes)
 app.get("/", (req, res) => {
   res.send("🎉 Selamat Datang di API Aplikasi Packing!");
@@ -28,6 +30,9 @@ app.get("/", (req, res) => {
 // PENTING: Setiap kali Anda membuat file rute baru di folder src/api/,
 // daftarkan di bawah ini agar bisa diakses oleh aplikasi.
 // ====================================================================
+
+const appRoutes = require("./src/routes/app.routes.js");
+app.use("/api/app", appRoutes);
 
 const authRoutes = require("./src/routes/auth.routes.js");
 app.use("/api/auth", authRoutes);
