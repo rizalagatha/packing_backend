@@ -64,13 +64,13 @@ const savePackingList = async (req, res) => {
       // Mode Edit: Cek status dulu
       const [cek] = await connection.query(
         "SELECT pl_status FROM tpacking_list_hdr WHERE pl_nomor = ?",
-        [plNomor]
+        [plNomor],
       );
 
       if (cek.length === 0) throw new Error("Data tidak ditemukan.");
       if (cek[0].pl_status === "C") {
         throw new Error(
-          "Packing List sudah Closed (Jadi SJ). Tidak bisa diedit."
+          "Packing List sudah Closed (Jadi SJ). Tidak bisa diedit.",
         );
       }
 
@@ -93,7 +93,7 @@ const savePackingList = async (req, res) => {
     // Hapus detail lama (cara paling aman untuk update)
     await connection.query(
       "DELETE FROM tpacking_list_dtl WHERE pld_nomor = ?",
-      [plNomor]
+      [plNomor],
     );
 
     // Insert detail baru
@@ -124,7 +124,7 @@ const savePackingList = async (req, res) => {
         `UPDATE tmintabarang_hdr 
          SET mt_close = 'Y', user_modified = ?, date_modified = NOW() 
          WHERE mt_nomor = ?`,
-        [user.kode, header.permintaan]
+        [user.kode, header.permintaan],
       );
     }
 
@@ -174,7 +174,7 @@ const getPackingListDetail = async (req, res) => {
     const itemsQuery = `
       SELECT 
         d.pld_kode AS kode,
-        TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS nama,
+        TRIM(CONCAT(IFNULL(a.brg_jeniskaos,''), " ", IFNULL(a.brg_tipe,''), " ", IFNULL(a.brg_lengan,''), " ", IFNULL(a.brg_jeniskain,''), " ", IFNULL(a.brg_warna,''))) AS nama,
         d.pld_ukuran AS ukuran,
         d.pld_jumlah AS jumlah,
         d.pld_keterangan AS keterangan,
