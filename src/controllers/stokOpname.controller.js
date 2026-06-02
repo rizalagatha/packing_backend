@@ -117,14 +117,16 @@ const uploadHasilOpname = async (req, res) => {
     // hs_qty = hs_qty + VALUES(hs_qty) -> Menambahkan hasil scan baru ke data lama
     const query = `
       INSERT INTO thitungstok 
-        (hs_cab, hs_lokasi, hs_barcode, hs_kode, hs_nama, hs_ukuran, hs_qty, hs_proses, hs_device, hs_operator, date_create, user_create)
+        (hs_cab, hs_lokasi, hs_barcode, hs_kode, hs_nama, hs_ukuran, hs_qty, hs_proses, hs_device, hs_operator, date_create, user_create, hs_nopl, hs_noprod)
       VALUES ?
       ON DUPLICATE KEY UPDATE 
         hs_qty = hs_qty + VALUES(hs_qty), 
         hs_device = VALUES(hs_device),
         hs_operator = VALUES(hs_operator),
         user_create = VALUES(user_create),
-        date_create = VALUES(date_create)
+        date_create = VALUES(date_create),
+        hs_nopl = IF(VALUES(hs_nopl) != '', VALUES(hs_nopl), hs_nopl),    -- Timpa jika ada data baru, biarkan jika kosong
+        hs_noprod = IF(VALUES(hs_noprod) != '', VALUES(hs_noprod), hs_noprod) -- Timpa jika ada data baru, biarkan jika kosong
     `;
 
     const values = items.map((item) => [
@@ -140,6 +142,8 @@ const uploadHasilOpname = async (req, res) => {
       operatorName || "No Name",
       new Date(),
       user.kode,
+      item.no_pl || "", // <-- Mapping hs_nopl
+      item.no_pack || "", // <-- Mapping hs_noprod
     ]);
 
     if (values.length > 0) {
