@@ -34,7 +34,7 @@ const downloadMasterBarang = async (req, res) => {
         -- Jika barcode di detail kosong, gunakan kode barang sebagai barcode
         TRIM(IFNULL(d.brgd_barcode, h.brg_kode)) AS barcode,
         h.brg_kode AS kode,
-        TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
+        TRIM(CONCAT(IFNULL(h.brg_jeniskaos,''), " ", IFNULL(h.brg_tipe,''), " ", IFNULL(h.brg_lengan,''), " ", IFNULL(h.brg_jeniskain,''), " ", IFNULL(h.brg_warna,''))) AS nama,
         IFNULL(d.brgd_ukuran, '') AS ukuran,
         '' AS lokasi,
         0 AS stok_sistem
