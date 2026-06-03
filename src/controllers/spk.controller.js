@@ -8,7 +8,8 @@ const findSpkByBarcode = async (req, res) => {
             c.spkd_nomor, 
             d.spk_nama,
             d.spk_tanggal,
-            c.spkd_qtyorder AS qty_order
+            c.spkd_qtyorder AS qty_order,
+            d.spk_close -- [DITAMBAHKAN] Agar aplikasi mobile tau SPK ini sudah close atau belum
         FROM tbarangdc_dtl b 
           LEFT JOIN kencanaprint.tspk_dc c ON b.brgd_kode = c.spkd_kode
           LEFT JOIN kencanaprint.tspk d ON c.spkd_nomor = d.spk_nomor
