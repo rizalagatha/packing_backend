@@ -4,7 +4,7 @@ const getAppVersion = async (req, res) => {
   try {
     const appInfo = {
       latestVersion: packageJson.version, // Ambil otomatis dari package.json
-      versionCode: 33, // Update angka ini setiap rilis baru di backend
+      versionCode: 34, // Update angka ini setiap rilis baru di backend
       apkUrl: "http://103.94.238.252:3000/public/updates/app-release.apk",
       forceUpdate: false,
       releaseNotes: "Update dan Fix untuk Stok Opname KDC",
