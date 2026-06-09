@@ -48,12 +48,53 @@ const searchSj = async (req, res) => {
 const loadInitialData = async (req, res) => {
   try {
     const { nomorSj } = req.params;
-    const headerQuery = `SELECT h.sj_nomor, h.sj_tanggal, h.sj_mt_nomor, h.sj_ket AS keterangan, h.sj_cab AS gudang_asal_kode, g_asal.gdg_nama AS gudang_asal_nama FROM tdc_sj_hdr h LEFT JOIN tgudang g_asal ON g_asal.gdg_kode = h.sj_cab WHERE h.sj_nomor = ?;`;
+
+    const headerQuery = `
+      SELECT 
+        h.sj_nomor, h.sj_tanggal, h.sj_mt_nomor, 
+        h.sj_ket AS keterangan, 
+        LEFT(h.sj_nomor, 3) AS gudang_asal_kode,
+        g_asal.gdg_nama AS gudang_asal_nama 
+      FROM tdc_sj_hdr h 
+      LEFT JOIN tgudang g_asal ON g_asal.gdg_kode = LEFT(h.sj_nomor, 3)
+      WHERE h.sj_nomor = ?
+    `;
     const [headerRows] = await pool.query(headerQuery, [nomorSj]);
     if (headerRows.length === 0)
       throw new Error("Data Surat Jalan tidak ditemukan.");
 
-    const itemsQuery = `SELECT d.sjd_kode AS kode, b.brgd_barcode AS barcode, TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS nama, d.sjd_ukuran AS ukuran, d.sjd_jumlah AS jumlahKirim FROM tdc_sj_dtl d LEFT JOIN tbarangdc a ON a.brg_kode = d.sjd_kode LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = d.sjd_kode AND b.brgd_ukuran = d.sjd_ukuran WHERE d.sjd_nomor = ? ORDER BY d.sjd_kode, d.sjd_ukuran;`;
+    const itemsQuery = `
+      SELECT 
+        d.sjd_kode    AS kode,
+        COALESCE(
+          NULLIF(TRIM(CONCAT(
+            IFNULL(a.brg_jeniskaos,''), ' ',
+            IFNULL(a.brg_tipe,''), ' ',
+            IFNULL(a.brg_lengan,''), ' ',
+            IFNULL(a.brg_jeniskain,''), ' ',
+            IFNULL(a.brg_warna,'')
+          )), ''),
+          g.brg_nama
+        )               AS nama,
+        d.sjd_ukuran    AS ukuran,
+        b.brgd_barcode  AS barcode,
+        d.sjd_jumlah    AS jumlahKirim,
+        CASE 
+          WHEN g.brg_jenis IN ('ACCESORIES','OBAT') THEN d.sjd_jumlah
+          ELSE 0
+        END             AS jumlahTerima,
+        CASE 
+          WHEN g.brg_jenis IN ('ACCESORIES','OBAT') THEN g.brg_jenis
+          ELSE NULL
+        END             AS jenisBahan
+      FROM tdc_sj_dtl d
+      LEFT JOIN tbarangdc a        ON a.brg_kode  = d.sjd_kode
+      LEFT JOIN tbarangdc_dtl b    ON b.brgd_kode = d.sjd_kode 
+                                  AND b.brgd_ukuran = d.sjd_ukuran
+      LEFT JOIN kencanaprint.tgarmen_brg g ON g.brg_kode = d.sjd_kode
+      WHERE d.sjd_nomor = ?
+      ORDER BY d.sjd_kode, d.sjd_ukuran
+    `;
     const [items] = await pool.query(itemsQuery, [nomorSj]);
 
     res
