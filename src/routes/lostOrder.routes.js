@@ -1,10 +1,13 @@
 const express = require("express");
 const router = express.Router();
 const lostOrderController = require("../controllers/lostOrder.controller");
-const authMiddleware = require("../middlewares/auth.middleware");
 
-// Terapkan middleware auth agar hanya user ter-login yang bisa akses
-router.use(authMiddleware);
+// [PERBAIKAN DI SINI]
+// Sesuaikan "verifyToken" dengan nama fungsi asli yang ada di file auth.middleware.js Anda
+const { authenticateToken } = require("../middlewares/auth.middleware");
+
+// Terapkan middleware
+router.use(authenticateToken);
 
 // Endpoint POST untuk menyimpan data
 router.post("/", lostOrderController.createLostOrder);
