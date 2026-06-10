@@ -327,9 +327,6 @@ const getSalesChart = async (req, res) => {
     if (groupBy === "month")
       dateSelect = "DATE_FORMAT(h.inv_tanggal, '%Y-%m-01')";
 
-    // LOG FOR DEBUGGING BACKEND (Optional, check your terminal)
-    // console.log("Chart Filter:", cabang, "Condition:", branchCondition);
-
     const query = `
       SELECT 
         ${dateSelect} as tanggal,
@@ -809,10 +806,6 @@ const getNegativeStockReport = async (req, res) => {
       ORDER BY s.stok ASC
       LIMIT 20;
     `;
-
-    // Debugging (Cek di terminal backend jika masih kosong)
-    // console.log('Query Stok Minus:', query);
-    // console.log('Params:', params);
 
     const [rows] = await pool.query(query, params);
     res.json({ success: true, data: rows });

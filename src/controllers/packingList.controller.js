@@ -212,8 +212,6 @@ const getPackingListDetail = async (req, res) => {
 const loadItemsFromRequest = async (req, res) => {
   const { nomor } = req.query; // Mengambil ?nomor=...
 
-  console.log(`[API] Loading items for Permintaan: ${nomor}`);
-
   try {
     const query = `
       SELECT 
@@ -243,8 +241,6 @@ const loadItemsFromRequest = async (req, res) => {
     `;
 
     const [rows] = await pool.query(query, [nomor]);
-
-    console.log(`[API] Found ${rows.length} items.`);
 
     // Kembalikan array data ke frontend
     res.json(rows);
@@ -303,9 +299,6 @@ const findProductByBarcode = async (req, res) => {
 const searchPermintaanOpen = async (req, res) => {
   const { term = "", page = 1, storeKode } = req.query;
 
-  // Debugging: Cek apa yang diterima backend
-  console.log("[API] Search Permintaan:", { term, page, storeKode });
-
   try {
     if (!storeKode) {
       return res.json([]);
@@ -350,13 +343,14 @@ const searchPermintaanOpen = async (req, res) => {
                 OR h.mt_otomatis LIKE ? 
                 OR h.mt_ket LIKE ?
             )
-        ORDER BY h.date_create DESC
+        ORDER BY 
+          h.mt_otomatis ASC, -- Asumsi 'N' (Manual) akan muncul sebelum 'Y' (Auto) karena urutan alfabet
+          h.date_create DESC
         LIMIT ? OFFSET ?
     `;
 
     const [rows] = await pool.query(query, params);
 
-    console.log(`[API] Found ${rows.length} permintaan for store ${storeKode}`);
     res.json(rows);
   } catch (error) {
     console.error("Error searchPermintaanOpen:", error);

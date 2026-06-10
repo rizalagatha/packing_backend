@@ -11,11 +11,6 @@ const findByBarcode = async (req, res) => {
         .json({ success: false, message: 'Parameter "gudang" diperlukan.' });
     }
 
-    console.log("🔍 [Backend] Validasi Barcode");
-    console.log("   📦 Barcode:", barcode);
-    console.log("   🏢 Gudang:", gudang);
-    console.log("   📋 SPK Nomor:", spk_nomor || "TIDAK ADA");
-
     // 1. Cek barcode dan ambil data
     const stokQuery = `
       SELECT
@@ -38,7 +33,6 @@ const findByBarcode = async (req, res) => {
     const [stokRows] = await pool.query(stokQuery, [gudang, barcode]);
 
     if (stokRows.length === 0) {
-      console.log("   ❌ Barcode tidak ditemukan di database");
       return res.status(404).json({
         success: false,
         message: "Barcode tidak ditemukan atau barang tidak aktif.",
@@ -46,11 +40,9 @@ const findByBarcode = async (req, res) => {
     }
 
     const product = stokRows[0];
-    console.log("   ✅ Barcode ditemukan:", product);
 
     // Jika scan pertama, tidak perlu validasi SPK
     if (!spk_nomor) {
-      console.log("   ℹ️  Scan pertama, tidak ada validasi SPK");
       return res.status(200).json({ success: true, data: product });
     }
 

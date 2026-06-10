@@ -43,11 +43,7 @@ const loadStbjData = async (req, res) => {
       ORDER BY d.stbjd_packing, d.stbjd_spk_nomor, d.stbjd_size;
     `;
 
-    console.log("Loading STBJ:", stbjNomor);
-
     const [stbjItems] = await pool.query(stbjQuery, [stbjNomor]);
-
-    console.log("Total items loaded:", stbjItems.length);
 
     if (stbjItems.length === 0) {
       return res.status(404).json({
@@ -61,8 +57,6 @@ const loadStbjData = async (req, res) => {
       ...item,
       uniqueKey: `${item.stbjd_spk_nomor}-${item.ukuran}-${item.stbjd_packing}-${index}`,
     }));
-
-    console.log("Sample item:", itemsWithKey[0]);
 
     res.status(200).json({ success: true, data: itemsWithKey });
   } catch (error) {
@@ -78,11 +72,6 @@ const getPackingDetailForChecker = async (req, res) => {
   try {
     const { nomor } = req.params;
 
-    console.log("=== GET PACKING DETAIL ===");
-    console.log("Requested nomor:", nomor);
-    console.log("Type:", typeof nomor);
-    console.log("Length:", nomor.length);
-
     // Try both with and without kencanaprint prefix
     let query = `
       SELECT 
@@ -95,8 +84,6 @@ const getPackingDetailForChecker = async (req, res) => {
     `;
 
     let [rows] = await pool.query(query, [nomor]);
-
-    console.log("Query without prefix - found:", rows.length);
 
     // If not found, try with prefix
     if (rows.length === 0) {
@@ -111,7 +98,6 @@ const getPackingDetailForChecker = async (req, res) => {
       `;
 
       [rows] = await pool.query(query, [nomor]);
-      console.log("Query with prefix - found:", rows.length);
     }
 
     if (rows.length === 0) {
@@ -120,7 +106,6 @@ const getPackingDetailForChecker = async (req, res) => {
         "SELECT DISTINCT packd_pack_nomor FROM tpacking_dtl WHERE packd_pack_nomor LIKE ? LIMIT 5",
         [`%${nomor}%`],
       );
-      console.log("Similar packing numbers:", similar);
 
       return res.status(404).json({
         success: false,
@@ -131,8 +116,6 @@ const getPackingDetailForChecker = async (req, res) => {
         },
       });
     }
-
-    console.log("Sample row:", rows[0]);
 
     res.status(200).json({
       success: true,

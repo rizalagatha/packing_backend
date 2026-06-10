@@ -696,9 +696,6 @@ const sendReceiptWa = async (req, res) => {
 
 // 7. Send Receipt WA (VERSI GAMBAR)
 const sendReceiptWaImage = async (req, res) => {
-  // Log saat request masuk
-  console.log("[UPLOAD] Menerima request upload gambar...");
-
   upload(req, res, async function (err) {
     if (err) {
       console.error("[UPLOAD ERROR] Multer Error:", err);
@@ -708,10 +705,6 @@ const sendReceiptWaImage = async (req, res) => {
     }
 
     try {
-      // LOG DATA YANG DITERIMA
-      console.log("[UPLOAD] Body:", req.body); // Cek apakah 'hp' dan 'caption' masuk
-      console.log("[UPLOAD] File:", req.file ? "Ada File" : "TIDAK ADA FILE");
-
       const { hp, caption } = req.body;
       const file = req.file;
       const { cabang } = req.user;
@@ -735,8 +728,6 @@ const sendReceiptWaImage = async (req, res) => {
       let cleanHp = hp.toString().replace(/[^0-9]/g, "");
       if (cleanHp.startsWith("0")) cleanHp = "62" + cleanHp.slice(1);
 
-      console.log(`[UPLOAD] Mengirim ke Service WA (${cleanHp})...`);
-
       // Kirim ke Service Baileys
       const result = await whatsappService.sendImageFromClient(
         cabang,
@@ -746,7 +737,6 @@ const sendReceiptWaImage = async (req, res) => {
       );
 
       if (result.success) {
-        console.log("[UPLOAD] Sukses terkirim!");
         res
           .status(200)
           .json({ success: true, message: "Struk Gambar Terkirim!" });
