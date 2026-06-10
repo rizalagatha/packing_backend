@@ -103,6 +103,9 @@ app.use("/api/bazar", bazarRoutes);
 const terimaReturDcRoutes = require("./src/routes/terimaReturDc.routes");
 app.use("/api/terima-retur-dc", terimaReturDcRoutes);
 
+const lostOrderRoutes = require("./src/routes/lostOrder.routes");
+app.use("/api/lost-order", lostOrderRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.use((err, req, res, next) => {
