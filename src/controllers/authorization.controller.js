@@ -104,6 +104,7 @@ const createRequest = async (req, res) => {
         const isKlaimPettyCash = String(o_jenis).trim() === "KLAIM_PETTYCASH"; // [TAMBAH INI]
         const isSubmitBap = String(o_jenis).trim() === "SUBMIT_BAP";
         const isClosePenawaran = String(o_jenis).trim() === "CLOSE_PENAWARAN";
+        const isCloseSoDtf = String(o_jenis).trim() === "CLOSE_SO_DTF";
 
         let managerCodes = ["DARUL"]; // Darul selalu dikirim
 
@@ -111,9 +112,9 @@ const createRequest = async (req, res) => {
           isPeminjaman ||
           isKlaimPettyCash ||
           isSubmitBap ||
-          isClosePenawaran
+          isClosePenawaran ||
+          isCloseSoDtf
         ) {
-          // ← UPDATE
           if (!managerCodes.includes("ESTU")) managerCodes.push("ESTU");
         }
 
@@ -125,9 +126,9 @@ const createRequest = async (req, res) => {
             !isPeminjaman &&
             !isKlaimPettyCash &&
             !isSubmitBap &&
-            !isClosePenawaran
+            !isClosePenawaran &&
+            !isCloseSoDtf
           ) {
-            // ← UPDATE
             managerCodes.push("HARIS");
           }
         }
@@ -220,6 +221,7 @@ const getPendingRequests = async (req, res) => {
       "DISKON_ITEM",
       "PIUTANG",
       "CLOSE_PENAWARAN",
+      "CLOSE_SO_DTF",
     ];
 
     if (user.cabang === "KDC") {
@@ -235,6 +237,7 @@ const getPendingRequests = async (req, res) => {
           "KLAIM_PETTYCASH",
           "SUBMIT_BAP",
           "CLOSE_PENAWARAN",
+          "CLOSE_SO_DTF",
         ]);
       } else if (userKodeUpper === "HARIS") {
         if (isEstuManagerPeriod) {
@@ -313,6 +316,7 @@ const processRequest = async (req, res) => {
       "TRANSFER_SOP",
       "DISKON_FAKTUR",
       "CLOSE_PENAWARAN",
+      "CLOSE_SO_DTF",
     ];
     if (managerTypes.includes(o_jenis) && user.cabang !== "KDC") {
       return res.status(403).json({
@@ -338,18 +342,20 @@ const processRequest = async (req, res) => {
       const isKlaimPettyCash = o_jenis === "KLAIM_PETTYCASH";
       const isSubmitBap = o_jenis === "SUBMIT_BAP";
       const isClosePenawaran = o_jenis === "CLOSE_PENAWARAN";
+      const isCloseSoDtf = o_jenis === "CLOSE_SO_DTF";
 
       if (
         !isPeminjaman &&
         !isKlaimPettyCash &&
         !isSubmitBap &&
         !isClosePenawaran &&
+        !isCloseSoDtf &&
         !isEstuManagerPeriod
       ) {
         return res.status(403).json({
           success: false,
           message:
-            "Anda hanya berwenang untuk otorisasi Peminjaman Barang, Klaim Petty Cash, dan BAP di luar periode 12-16 Jan.",
+            "Anda hanya berwenang untuk otorisasi Peminjaman Barang, Klaim Petty Cash, BAP, Close Penawaran, dan Close SO DTF di luar periode 12-16 Jan.",
         });
       }
     }
