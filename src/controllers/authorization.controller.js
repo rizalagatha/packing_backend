@@ -102,18 +102,32 @@ const createRequest = async (req, res) => {
           today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
         const isPeminjaman = String(o_jenis).trim() === "PEMINJAMAN_BARANG";
         const isKlaimPettyCash = String(o_jenis).trim() === "KLAIM_PETTYCASH"; // [TAMBAH INI]
+        const isSubmitBap = String(o_jenis).trim() === "SUBMIT_BAP";
+        const isClosePenawaran = String(o_jenis).trim() === "CLOSE_PENAWARAN";
 
         let managerCodes = ["DARUL"]; // Darul selalu dikirim
 
-        if (isPeminjaman || isKlaimPettyCash) {
+        if (
+          isPeminjaman ||
+          isKlaimPettyCash ||
+          isSubmitBap ||
+          isClosePenawaran
+        ) {
+          // ← UPDATE
           if (!managerCodes.includes("ESTU")) managerCodes.push("ESTU");
         }
 
         if (isEstuManagerPeriod) {
           if (!managerCodes.includes("ESTU")) managerCodes.push("ESTU");
         } else {
-          // HARIS TIDAK MENDAPATKAN PEMINJAMAN & KLAIM PETTY CASH
-          if (!isPeminjaman && !isKlaimPettyCash) {
+          // HARIS tidak mendapat notif Close Penawaran
+          if (
+            !isPeminjaman &&
+            !isKlaimPettyCash &&
+            !isSubmitBap &&
+            !isClosePenawaran
+          ) {
+            // ← UPDATE
             managerCodes.push("HARIS");
           }
         }
@@ -205,6 +219,7 @@ const getPendingRequests = async (req, res) => {
       "BELUM_LUNAS",
       "DISKON_ITEM",
       "PIUTANG",
+      "CLOSE_PENAWARAN",
     ];
 
     if (user.cabang === "KDC") {
@@ -215,7 +230,12 @@ const getPendingRequests = async (req, res) => {
         } else {
           query += " AND o_jenis IN (?)";
         }
-        params.push(["PEMINJAMAN_BARANG", "KLAIM_PETTYCASH", "SUBMIT_BAP"]);
+        params.push([
+          "PEMINJAMAN_BARANG",
+          "KLAIM_PETTYCASH",
+          "SUBMIT_BAP",
+          "CLOSE_PENAWARAN",
+        ]);
       } else if (userKodeUpper === "HARIS") {
         if (isEstuManagerPeriod) {
           query += " AND 1=0";
@@ -292,6 +312,7 @@ const processRequest = async (req, res) => {
       "SUBMIT_BAP",
       "TRANSFER_SOP",
       "DISKON_FAKTUR",
+      "CLOSE_PENAWARAN",
     ];
     if (managerTypes.includes(o_jenis) && user.cabang !== "KDC") {
       return res.status(403).json({
@@ -316,11 +337,13 @@ const processRequest = async (req, res) => {
       const isPeminjaman = o_jenis === "PEMINJAMAN_BARANG";
       const isKlaimPettyCash = o_jenis === "KLAIM_PETTYCASH";
       const isSubmitBap = o_jenis === "SUBMIT_BAP";
+      const isClosePenawaran = o_jenis === "CLOSE_PENAWARAN";
 
       if (
         !isPeminjaman &&
         !isKlaimPettyCash &&
         !isSubmitBap &&
+        !isClosePenawaran &&
         !isEstuManagerPeriod
       ) {
         return res.status(403).json({
