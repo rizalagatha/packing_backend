@@ -105,6 +105,7 @@ const createRequest = async (req, res) => {
         const isSubmitBap = String(o_jenis).trim() === "SUBMIT_BAP";
         const isClosePenawaran = String(o_jenis).trim() === "CLOSE_PENAWARAN";
         const isCloseSoDtf = String(o_jenis).trim() === "CLOSE_SO_DTF";
+        const isCloseSo = String(o_jenis).trim() === "CLOSE_SO";
 
         let managerCodes = ["DARUL"]; // Darul selalu dikirim
 
@@ -113,7 +114,8 @@ const createRequest = async (req, res) => {
           isKlaimPettyCash ||
           isSubmitBap ||
           isClosePenawaran ||
-          isCloseSoDtf
+          isCloseSoDtf ||
+          isCloseSo
         ) {
           if (!managerCodes.includes("ESTU")) managerCodes.push("ESTU");
         }
@@ -127,7 +129,8 @@ const createRequest = async (req, res) => {
             !isKlaimPettyCash &&
             !isSubmitBap &&
             !isClosePenawaran &&
-            !isCloseSoDtf
+            !isCloseSoDtf &&
+            !isCloseSo
           ) {
             managerCodes.push("HARIS");
           }
@@ -222,6 +225,7 @@ const getPendingRequests = async (req, res) => {
       "PIUTANG",
       "CLOSE_PENAWARAN",
       "CLOSE_SO_DTF",
+      "CLOSE_SO",
     ];
 
     if (user.cabang === "KDC") {
@@ -238,6 +242,7 @@ const getPendingRequests = async (req, res) => {
           "SUBMIT_BAP",
           "CLOSE_PENAWARAN",
           "CLOSE_SO_DTF",
+          "CLOSE_SO",
         ]);
       } else if (userKodeUpper === "HARIS") {
         if (isEstuManagerPeriod) {
@@ -317,6 +322,7 @@ const processRequest = async (req, res) => {
       "DISKON_FAKTUR",
       "CLOSE_PENAWARAN",
       "CLOSE_SO_DTF",
+      "CLOSE_SO",
     ];
     if (managerTypes.includes(o_jenis) && user.cabang !== "KDC") {
       return res.status(403).json({
@@ -343,6 +349,7 @@ const processRequest = async (req, res) => {
       const isSubmitBap = o_jenis === "SUBMIT_BAP";
       const isClosePenawaran = o_jenis === "CLOSE_PENAWARAN";
       const isCloseSoDtf = o_jenis === "CLOSE_SO_DTF";
+      const isCloseSo = o_jenis === "CLOSE_SO";
 
       if (
         !isPeminjaman &&
@@ -350,12 +357,13 @@ const processRequest = async (req, res) => {
         !isSubmitBap &&
         !isClosePenawaran &&
         !isCloseSoDtf &&
+        !isCloseSo &&
         !isEstuManagerPeriod
       ) {
         return res.status(403).json({
           success: false,
           message:
-            "Anda hanya berwenang untuk otorisasi Peminjaman Barang, Klaim Petty Cash, BAP, Close Penawaran, dan Close SO DTF di luar periode 12-16 Jan.",
+            "Anda hanya berwenang untuk otorisasi Peminjaman Barang, Klaim Petty Cash, BAP, Close Penawaran, Close SO DTF, dan Close SO di luar periode 12-16 Jan.",
         });
       }
     }
