@@ -51,11 +51,10 @@ const getTodayStats = async (req, res) => {
       params.push(user.cabang);
     }
 
-    const query = `
+    // Query 1: Ambit data Transaksi, Omset, dan Qty Barang
+    const querySales = `
       SELECT
         COUNT(DISTINCT h.inv_nomor) AS trx,
-        -- Menggunakan COALESCE agar nilai NULL tidak membuat hasil SUM menjadi NULL/0
-        -- Menggunakan ROUND untuk menghilangkan margin desimal ribuan
         ROUND(SUM(
             (SELECT SUM(dd.invd_jumlah * (dd.invd_harga - dd.invd_diskon)) 
              FROM tinv_dtl dd WHERE dd.invd_inv_nomor = h.inv_nomor) 
@@ -66,7 +65,6 @@ const getTodayStats = async (req, res) => {
               ))
             + COALESCE(h.inv_bkrm, 0)
         ), 0) AS todaySales,
-        
         IFNULL(SUM(
           (SELECT SUM(dd.invd_jumlah) FROM tinv_dtl dd 
            WHERE dd.invd_inv_nomor = h.inv_nomor
@@ -79,13 +77,35 @@ const getTodayStats = async (req, res) => {
         ${branchFilter};
     `;
 
-    const [rows] = await pool.query(query, params);
+    const [salesRows] = await pool.query(querySales, params);
+
+    // Query 2: Hitung jumlah kunjungan customer (Lost Order/Sukses Transaksi) harian
+    let kunjunganFilter = "";
+    let kunjunganParams = [today];
+
+    if (isKDC) {
+      if (cabang && cabang !== "ALL") {
+        kunjunganFilter = " AND cabang = ? ";
+        kunjunganParams.push(cabang);
+      }
+    } else {
+      kunjunganFilter = " AND cabang = ? ";
+      kunjunganParams.push(user.cabang);
+    }
+
+    const [kunjunganRows] = await pool.query(
+      `SELECT COUNT(*) AS total FROM tkunjungan_customer WHERE tanggal = ? ${kunjunganFilter}`,
+      kunjunganParams,
+    );
+
     res.json({
-      todayTransactions: Number(rows[0].trx) || 0,
-      todayQty: Number(rows[0].todayQty) || 0,
-      todaySales: Number(rows[0].todaySales) || 0,
+      todayTransactions: Number(salesRows[0].trx) || 0,
+      todayQty: Number(salesRows[0].todayQty) || 0,
+      todaySales: Number(salesRows[0].todaySales) || 0,
+      todayVisits: Number(kunjunganRows[0].total) || 0, // <--- DATA VISITOR BARU
     });
   } catch (error) {
+    console.error("Error getTodayStats:", error);
     res.status(500).json({ message: "Gagal memuat statistik" });
   }
 };
