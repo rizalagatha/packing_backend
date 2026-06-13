@@ -4,13 +4,13 @@ const getAppVersion = async (req, res) => {
   try {
     const appInfo = {
       latestVersion: packageJson.version, // Ambil otomatis dari package.json
-      versionCode: 44, // Update angka ini setiap rilis baru di backend
+      versionCode: 45, // Update angka ini setiap rilis baru di backend
       apkUrl: "http://103.94.238.252:3000/public/updates/app-release.apk",
       forceUpdate: false,
       // Ubah dari string tunggal menjadi Array
       releaseNotes: [
-        "Menu baru Lost Order dan Riwayat Lost Order, digunakan untuk mencatat lost order dari customer",
-        "Update Terima SJ untuk dapat menerima Accesories dan Obat di update Retail mendatang yang akan distok",
+        "Customer Count dan Lost Order pada Management Dashboard",
+        "Fix untuk stok opname K10",
       ],
     };
     res.status(200).json({ success: true, data: appInfo });
