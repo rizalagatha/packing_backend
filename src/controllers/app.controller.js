@@ -4,13 +4,13 @@ const getAppVersion = async (req, res) => {
   try {
     const appInfo = {
       latestVersion: packageJson.version, // Ambil otomatis dari package.json
-      versionCode: 46, // Update angka ini setiap rilis baru di backend
+      versionCode: 47, // Update angka ini setiap rilis baru di backend
       apkUrl: "http://103.94.238.252:3000/public/updates/app-release.apk",
       forceUpdate: false,
       // Ubah dari string tunggal menjadi Array
       releaseNotes: [
         "Customer Count dan Lost Order pada Management Dashboard",
-        "Fix untuk stok opname K10",
+        "Fix Dialog Update pada Login Screen",
       ],
     };
     res.status(200).json({ success: true, data: appInfo });
