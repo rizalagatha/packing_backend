@@ -8,5 +8,6 @@ router.get("/cabang", soController.getCabangList);
 router.get("/download", soController.downloadMasterBarang);
 router.get("/download-lokasi", soController.downloadMasterLokasi);
 router.post("/upload", soController.uploadHasilOpname);
+router.get("/compare-lokasi", soController.checkMismatchLokasi);
 
 module.exports = router;

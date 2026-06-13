@@ -163,9 +163,41 @@ const uploadHasilOpname = async (req, res) => {
   }
 };
 
+// --- FUNGSI KOMPARASI STOK OPNAME ---
+const checkMismatchLokasi = async (req, res) => {
+  try {
+    const { cabang, lokasi } = req.query;
+
+    if (!cabang || !lokasi) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Cabang dan Lokasi wajib diisi" });
+    }
+
+    // Ambil rekap data dari thitungstok di server
+    const query = `
+      SELECT 
+        hs_barcode AS barcode, 
+        hs_nama AS nama, 
+        SUM(hs_qty) AS qty_server
+      FROM thitungstok
+      WHERE hs_cab = ? AND hs_lokasi = ?
+      GROUP BY hs_barcode, hs_nama
+    `;
+
+    const [rows] = await pool.query(query, [cabang, lokasi]);
+
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error checkMismatchLokasi:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getCabangList,
   downloadMasterBarang,
   downloadMasterLokasi,
   uploadHasilOpname,
+  checkMismatchLokasi,
 };
