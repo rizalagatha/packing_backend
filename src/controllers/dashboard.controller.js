@@ -51,7 +51,7 @@ const getTodayStats = async (req, res) => {
       params.push(user.cabang);
     }
 
-    // Query 1: Ambit data Transaksi, Omset, dan Qty Barang
+    // Query 1: Ambil data Transaksi, Omset, dan Qty Barang
     const querySales = `
       SELECT
         COUNT(DISTINCT h.inv_nomor) AS trx,
@@ -79,30 +79,29 @@ const getTodayStats = async (req, res) => {
 
     const [salesRows] = await pool.query(querySales, params);
 
-    // Query 2: Hitung jumlah kunjungan customer (Lost Order/Sukses Transaksi) harian
-    let kunjunganFilter = "";
+    // Query 2: Kunjungan Customer (tkunjungan_customer)
+    let kunjunganFilter = "WHERE tanggal = ?";
     let kunjunganParams = [today];
 
     if (isKDC) {
       if (cabang && cabang !== "ALL") {
-        kunjunganFilter = " AND cabang = ? ";
+        kunjunganFilter += " AND cabang = ?";
         kunjunganParams.push(cabang);
       }
     } else {
-      kunjunganFilter = " AND cabang = ? ";
+      kunjunganFilter += " AND cabang = ?";
       kunjunganParams.push(user.cabang);
     }
 
-    const [kunjunganRows] = await pool.query(
-      `SELECT COUNT(*) AS total FROM tkunjungan_customer WHERE tanggal = ? ${kunjunganFilter}`,
-      kunjunganParams,
-    );
+    const queryKunjungan = `SELECT COUNT(*) AS total FROM tkunjungan_customer ${kunjunganFilter}`;
+    const [kunjunganRows] = await pool.query(queryKunjungan, kunjunganParams);
 
+    // Kirim response dengan parsing Number yang sangat aman
     res.json({
-      todayTransactions: Number(salesRows[0].trx) || 0,
-      todayQty: Number(salesRows[0].todayQty) || 0,
-      todaySales: Number(salesRows[0].todaySales) || 0,
-      todayVisits: Number(kunjunganRows[0].total) || 0, // <--- DATA VISITOR BARU
+      todayTransactions: Number(salesRows[0]?.trx || 0),
+      todayQty: Number(salesRows[0]?.todayQty || 0),
+      todaySales: Number(salesRows[0]?.todaySales || 0),
+      todayVisits: Number(kunjunganRows[0]?.total || 0), // <--- SUMBER DARI tkunjungan_customer
     });
   } catch (error) {
     console.error("Error getTodayStats:", error);
@@ -115,14 +114,14 @@ const getTotalPiutang = async (req, res) => {
   try {
     const user = req.user;
     const { cabang } = req.query;
-    let branchFilter = "";
+    let branchFilter = " AND ph.ph_cab != 'KDC' ";
     let params = [];
 
     if (user.cabang !== "KDC") {
-      branchFilter = " AND ph.ph_cab = ? ";
+      branchFilter += " AND ph.ph_cab = ? ";
       params.push(user.cabang);
     } else if (cabang && cabang !== "ALL") {
-      branchFilter = " AND ph.ph_cab = ? ";
+      branchFilter += " AND ph.ph_cab = ? ";
       params.push(cabang);
     }
 
@@ -446,6 +445,7 @@ const getPiutangPerCabang = async (req, res) => {
             ) v ON v.pd_ph_nomor = u.ph_nomor
             LEFT JOIN tgudang g ON g.gdg_kode = u.ph_cab
             WHERE (v.debet - v.kredit) > 0
+             AND u.ph_cab != 'KDC'
             GROUP BY u.ph_cab, g.gdg_nama
             ORDER BY sisa_piutang DESC;
         `;
@@ -835,6 +835,48 @@ const getNegativeStockReport = async (req, res) => {
   }
 };
 
+const getTodayLostOrders = async (req, res) => {
+  try {
+    const user = req.user;
+    const { cabang } = req.query;
+    const today = moment().format("YYYY-MM-DD");
+
+    let branchFilter = "";
+    let params = [today];
+
+    if (user.cabang !== "KDC") {
+      branchFilter = " AND lo.lo_cabang = ? ";
+      params.push(user.cabang);
+    } else if (cabang && cabang !== "ALL") {
+      branchFilter = " AND lo.lo_cabang = ? ";
+      params.push(cabang);
+    }
+
+    const query = `
+      SELECT 
+        lo.lo_id AS lo_id,
+        lo.lo_produk_nama AS lo_produk_nama,
+        lo.lo_ukuran AS lo_ukuran,
+        lo.lo_qty AS lo_qty,
+        IFNULL(lo.lo_customer_nama, 'Tanpa Nama') AS lo_customer_nama,
+        IFNULL(lo.lo_alasan, 'Lainnya') AS lo_alasan,
+        lo.lo_cabang AS lo_cabang
+      FROM tlost_order lo
+      WHERE DATE(lo.lo_tanggal) = ? ${branchFilter}
+      ORDER BY lo.lo_tanggal DESC
+    `;
+
+    const [rows] = await pool.query(query, params);
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error getTodayLostOrders:", error);
+    res.status(500).json({
+      success: false,
+      message: "Gagal memuat rincian visitor hari ini",
+    });
+  }
+};
+
 module.exports = {
   getTodayStats,
   getTotalPiutang,
@@ -850,4 +892,5 @@ module.exports = {
   getEmptyStockReguler,
   getProductSalesSpread,
   getNegativeStockReport,
+  getTodayLostOrders,
 };
