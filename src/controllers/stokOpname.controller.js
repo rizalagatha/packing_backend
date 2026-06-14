@@ -1,4 +1,5 @@
 const pool = require("../config/database");
+const moment = require("moment");
 
 // --- FUNGSI BARU: List Cabang (Untuk Dropdown Stok Opname) ---
 const getCabangList = async (req, res) => {
@@ -92,19 +93,11 @@ const downloadMasterLokasi = async (req, res) => {
   }
 };
 
-// 2. Upload Hasil (Integrasi ke tabel thitungstok)
+// --- 2. Upload Hasil (Integrasi ke tabel thitungstok dengan Filter Tanggal SO) ---
 const uploadHasilOpname = async (req, res) => {
   const { items, targetCabang, deviceInfo, operatorName } = req.body;
 
-  // HITUNG TOTAL PCS UNTUK LOG
   const totalPcs = items.reduce((sum, i) => sum + Number(i.qty_fisik || 0), 0);
-
-  console.log("========================================");
-  console.log("DEBUG: Request Upload Opname Diterima!");
-  console.log("Diterima dari Operator:", operatorName);
-  console.log("Jumlah SKU (Baris):", items ? items.length : 0);
-  console.log("Total Qty (Pcs):", totalPcs); // <--- Sekarang angka 40 akan muncul di sini
-  console.log("========================================");
   const user = req.user;
   const cabangTujuan = targetCabang || user.cabang;
 
@@ -113,20 +106,34 @@ const uploadHasilOpname = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    // --- LOGIKA AKUMULASI (CUMULATIVE) ---
-    // hs_qty = hs_qty + VALUES(hs_qty) -> Menambahkan hasil scan baru ke data lama
+    // 1. CARI TANGGAL STOK OPNAME AKTIF (st_transfer = 'N')
+    const [activeSoRows] = await connection.query(
+      `SELECT st_tanggal FROM tsop_tanggal WHERE st_cab = ? AND st_transfer = 'N' ORDER BY st_tanggal DESC LIMIT 1`,
+      [cabangTujuan],
+    );
+
+    // Jika tidak ada jadwal SO aktif, jadikan hari ini sebagai default fallback
+    const activeSoDate =
+      activeSoRows.length > 0
+        ? moment(activeSoRows[0].st_tanggal).format("YYYY-MM-DD")
+        : moment().format("YYYY-MM-DD");
+
+    // 2. LOGIKA AKUMULASI CERDAS (Mencegah penambahan ke data SO lama)
     const query = `
       INSERT INTO thitungstok 
         (hs_cab, hs_lokasi, hs_barcode, hs_kode, hs_nama, hs_ukuran, hs_qty, hs_proses, hs_device, hs_operator, date_create, user_create, hs_nopl, hs_noprod)
       VALUES ?
       ON DUPLICATE KEY UPDATE 
-        hs_qty = hs_qty + VALUES(hs_qty), 
+        -- JIKA data sudah diproses ('Y') ATAU tanggal scan-nya lebih tua dari jadwal SO aktif, maka TIMPA (RESET) data lamanya.
+        -- JIKA masih di periode SO yang sama ('N'), maka AKUMULASIKAN (+).
+        hs_qty = IF(hs_proses = 'Y' OR date_create IS NULL OR DATE(date_create) < ?, VALUES(hs_qty), hs_qty + VALUES(hs_qty)),
+        hs_proses = 'N', -- Selalu buka statusnya karena ada scan baru di periode aktif
         hs_device = VALUES(hs_device),
         hs_operator = VALUES(hs_operator),
         user_create = VALUES(user_create),
         date_create = VALUES(date_create),
-        hs_nopl = IF(VALUES(hs_nopl) != '', VALUES(hs_nopl), hs_nopl),    -- Timpa jika ada data baru, biarkan jika kosong
-        hs_noprod = IF(VALUES(hs_noprod) != '', VALUES(hs_noprod), hs_noprod) -- Timpa jika ada data baru, biarkan jika kosong
+        hs_nopl = IF(VALUES(hs_nopl) != '', VALUES(hs_nopl), hs_nopl),    
+        hs_noprod = IF(VALUES(hs_noprod) != '', VALUES(hs_noprod), hs_noprod)
     `;
 
     const values = items.map((item) => [
@@ -142,18 +149,19 @@ const uploadHasilOpname = async (req, res) => {
       operatorName || "No Name",
       new Date(),
       user.kode,
-      item.no_pl || "", // <-- Mapping hs_nopl
-      item.no_pack || "", // <-- Mapping hs_noprod
+      item.no_pl || "",
+      item.no_pack || "",
     ]);
 
     if (values.length > 0) {
-      await connection.query(query, [values]);
+      // Perhatikan urutan parameter: [ array values, parameter activeSoDate untuk IF statement ]
+      await connection.query(query, [values, activeSoDate]);
     }
 
     await connection.commit();
     res.status(200).json({
       success: true,
-      message: `Berhasil upload parsial. Data telah dijumlahkan di server.`,
+      message: `Berhasil upload parsial. Data diproses sesuai jadwal SO aktif (${activeSoDate}).`,
     });
   } catch (error) {
     if (connection) await connection.rollback();
@@ -163,7 +171,7 @@ const uploadHasilOpname = async (req, res) => {
   }
 };
 
-// --- FUNGSI KOMPARASI STOK OPNAME ---
+// --- FUNGSI KOMPARASI STOK OPNAME (Juga harus memfilter data lama) ---
 const checkMismatchLokasi = async (req, res) => {
   try {
     const { cabang, lokasi } = req.query;
@@ -175,13 +183,14 @@ const checkMismatchLokasi = async (req, res) => {
     }
 
     // Ambil rekap data dari thitungstok di server
+    // TAMBAHAN: Kita tambahkan AND hs_proses = 'N' agar fitur komparasi di HP tidak ikut mengkalkulasi bangkai data lama.
     const query = `
       SELECT 
         hs_barcode AS barcode, 
         hs_nama AS nama, 
         SUM(hs_qty) AS qty_server
       FROM thitungstok
-      WHERE hs_cab = ? AND hs_lokasi = ?
+      WHERE hs_cab = ? AND hs_lokasi = ? AND hs_proses = 'N'
       GROUP BY hs_barcode, hs_nama
     `;
 
