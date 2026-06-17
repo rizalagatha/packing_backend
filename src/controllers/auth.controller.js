@@ -12,15 +12,17 @@ const generateFinalToken = (user, cabangNama) => {
     user_kodekasir: user.user_kodekasir || "000",
   };
 
-  // Tentukan durasi token
-  // Jika user adalah HARIS, set 30 hari, selain itu 8 jam
-  // Gunakan toUpperCase() untuk antisipasi perbedaan huruf besar/kecil
-  let expiresIn = "12h"; // Default
+  // --- LOGIKA EXPIRATION TOKEN KHUSUS ---
+  let expiresIn = "12h"; // Default 12 Jam
 
-  const specialUsers = ["HARIS", "SETYO"];
+  if (user.user_kode) {
+    const userKodeUpper = user.user_kode.toUpperCase();
 
-  if (user.user_kode && specialUsers.includes(user.user_kode.toUpperCase())) {
-    expiresIn = "30d";
+    if (userKodeUpper === "SETYO") {
+      expiresIn = "365d"; // SETYO dapat 1 Tahun
+    } else if (userKodeUpper === "HARIS") {
+      expiresIn = "30d"; // HARIS tetap 30 Hari (sesuai kode lama Anda)
+    }
   }
 
   const token = jwt.sign(payload, process.env.JWT_SECRET, {
