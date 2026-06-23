@@ -32,7 +32,8 @@ const lookupProductByBarcode = async (req, res) => {
 };
 
 const saveData = async (req, res) => {
-  const { header, items, approver } = req.body;
+  //  Tangkap authNomor dari req.body hasil kiriman Frontend baru
+  const { header, items, approver, authNomor } = req.body;
   const user = req.user;
   const connection = await pool.getConnection();
 
@@ -45,20 +46,20 @@ const saveData = async (req, res) => {
       header.gudangKode,
       "tdc_sj_hdr",
       "sj_nomor",
-      "SJ"
+      "SJ",
     );
     const nomorTerima = await getNomor(
       connection,
       header.storeKode,
       "ttrm_sj_hdr",
       "tj_nomor",
-      "TJ"
+      "TJ",
     );
 
     // 2. Simpan Header SJ (KDC)
     await connection.query(
       `INSERT INTO tdc_sj_hdr (sj_nomor, sj_tanggal, sj_noterima, sj_kecab, sj_peminta, user_create, date_create) 
-             VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
       [
         nomorSJ,
         header.tanggal,
@@ -66,35 +67,46 @@ const saveData = async (req, res) => {
         header.storeKode,
         header.peminta,
         user.kode,
-      ]
+      ],
     );
 
     // 3. Simpan Header TJ (Terima Toko)
     await connection.query(
       `INSERT INTO ttrm_sj_hdr (tj_nomor, tj_tanggal, user_create, date_create) VALUES (?, ?, ?, NOW())`,
-      [nomorTerima, header.tanggal, user.kode]
+      [nomorTerima, header.tanggal, user.kode],
     );
 
-    // 4. Simpan Detail Items
+    // 4. Simpan Detail Items (Gunakan pengaman filter item valid seperti versi Web)
     for (const item of items) {
+      if (item.kode && item.jumlah > 0) {
+        await connection.query(
+          `INSERT INTO tdc_sj_dtl (sjd_nomor, sjd_kode, sjd_ukuran, sjd_jumlah) VALUES (?, ?, ?, ?)`,
+          [nomorSJ, item.kode, item.ukuran, item.jumlah],
+        );
+        await connection.query(
+          `INSERT INTO ttrm_sj_dtl (tjd_nomor, tjd_kode, tjd_ukuran, tjd_jumlah) VALUES (?, ?, ?, ?)`,
+          [nomorTerima, item.kode, item.ukuran, item.jumlah],
+        );
+      }
+    }
+
+    // 5.  UPDATE TABEL REKORD OTORISASI DATABASE RETAIL
+    // Ubah status o_transaksi dari 'NEW_TRX' menjadi Nomor SJ Riil agar Trigger tidak memblokir mutasi
+    if (authNomor) {
       await connection.query(
-        `INSERT INTO tdc_sj_dtl (sjd_nomor, sjd_kode, sjd_ukuran, sjd_jumlah) VALUES (?, ?, ?, ?)`,
-        [nomorSJ, item.kode, item.ukuran, item.jumlah]
-      );
-      await connection.query(
-        `INSERT INTO ttrm_sj_dtl (tjd_nomor, tjd_kode, tjd_ukuran, tjd_jumlah) VALUES (?, ?, ?, ?)`,
-        [nomorTerima, item.kode, item.ukuran, item.jumlah]
+        `UPDATE totorisasi 
+         SET o_transaksi = ? 
+         WHERE o_nomor = ? AND o_jenis = 'AMBIL_BARANG'`,
+        [nomorSJ, authNomor],
       );
     }
 
     await connection.commit();
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: `Berhasil disimpan: ${nomorSJ}`,
-        nomor: nomorSJ,
-      });
+    res.status(201).json({
+      success: true,
+      message: `Berhasil disimpan: ${nomorSJ}`,
+      nomor: nomorSJ,
+    });
   } catch (error) {
     await connection.rollback();
     res.status(500).json({ message: error.message });
