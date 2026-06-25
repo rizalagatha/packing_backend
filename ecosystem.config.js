@@ -48,5 +48,28 @@ module.exports = {
         JWT_SECRET: "s+qG0PB3JQB/jHABdHfVejMBUm9zJtE4Mb1GHMAYXsw=",
       },
     },
+    {
+      // --- APLIKASI LOKAL (UNTUK TESTING DEV) ---
+      name: "packing-local",
+      script: "index.js",
+      watch: true,
+      ignore_watch: [
+        "node_modules",
+        ".wwebjs_auth",
+        ".wwebjs_cache",
+        "public",
+        "logs",
+      ],
+      env: {
+        NODE_ENV: "development",
+        PORT: 3004, // Gunakan port berbeda khusus lokal
+        DB_HOST: "103.94.238.252", // Tetap tembak DB Server (atau 127.0.0.1 jika DB ada di laptop)
+        DB_USER: "root", // Isi sesuai kredensial Anda
+        DB_PASSWORD: "Kencana#123",
+        DB_DATABASE: "retailnew", // Gunakan DB Trial agar aman untuk testing-testing
+        DB_PORT: 3306,
+        JWT_SECRET: "s+qG0PB3JQB/jHABdHfVejMBUm9zJtE4Mb1GHMAYXsw=",
+      },
+    },
   ],
 };
