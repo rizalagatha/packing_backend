@@ -217,45 +217,46 @@ const enrollDevice = async (req, res) => {
     const { user_kode, user_password, device_id, public_key, device_name } =
       req.body;
 
-    if (!user_kode || !user_password || !device_id || !public_key) {
-      return res.status(400).json({
-        success: false,
-        message: "Data pendaftaran perangkat tidak lengkap.",
-      });
-    }
-
-    // 1. Verifikasi Password Kasir
+    // 1. Verifikasi Password & Ambil Cabang User
     const [userRows] = await pool.query(
-      "SELECT user_password FROM tuser WHERE user_kode = ?",
+      "SELECT user_password, user_cab FROM tuser WHERE user_kode = ?",
       [user_kode],
     );
+
     if (userRows.length === 0)
       return res
         .status(404)
         .json({ success: false, message: "User tidak ditemukan." });
-
-    if (userRows[0].user_password !== user_password) {
+    if (userRows[0].user_password !== user_password)
       return res
         .status(401)
         .json({ success: false, message: "Password salah." });
-    }
 
-    // 2. Simpan perangkat ke database (Otomatis statusnya PENDING)
-    // Jika device_id sudah ada, kita update public_key-nya dan reset status ke PENDING
+    const userCabang = userRows[0].user_cab;
+
+    // 2. Simpan ke database dengan kolom cabang baru
     await pool.query(
-      `INSERT INTO tuser_device (device_id, user_kode, public_key, device_name, status, created_at) 
-       VALUES (?, ?, ?, ?, 'PENDING', NOW()) 
-       ON DUPLICATE KEY UPDATE public_key = ?, user_kode = ?, status = 'PENDING', created_at = NOW()`,
-      [device_id, user_kode, public_key, device_name, public_key, user_kode],
+      `INSERT INTO tuser_device (device_id, user_kode, cabang, public_key, device_name, status, created_at) 
+       VALUES (?, ?, ?, ?, ?, 'PENDING', NOW()) 
+       ON DUPLICATE KEY UPDATE public_key = ?, user_kode = ?, cabang = ?, status = 'PENDING', created_at = NOW()`,
+      [
+        device_id,
+        user_kode,
+        userCabang,
+        public_key,
+        device_name,
+        public_key,
+        user_kode,
+        userCabang,
+      ],
     );
 
     res.status(200).json({
       success: true,
-      message:
-        "Perangkat berhasil didaftarkan. Menunggu persetujuan (Approval) dari Manager Pusat.",
+      message: "Perangkat berhasil didaftarkan. Menunggu approval.",
     });
   } catch (error) {
-    console.error("Enroll Device Error:", error);
+    console.error("Enroll Error:", error);
     res
       .status(500)
       .json({ success: false, message: "Gagal mendaftarkan perangkat." });
@@ -273,21 +274,17 @@ const requestChallenge = async (req, res) => {
     );
 
     if (deviceRows.length === 0) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          needsEnrollment: true,
-          message: "Perangkat belum terdaftar.",
-        });
+      return res.status(404).json({
+        success: false,
+        needsEnrollment: true,
+        message: "Perangkat belum terdaftar.",
+      });
     }
     if (deviceRows[0].status !== "APPROVED") {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message: `Perangkat belum disetujui (Status: ${deviceRows[0].status})`,
-        });
+      return res.status(403).json({
+        success: false,
+        message: `Perangkat belum disetujui (Status: ${deviceRows[0].status})`,
+      });
     }
 
     // 2. Buat string acak (Challenge) sepanjang 32 bytes
