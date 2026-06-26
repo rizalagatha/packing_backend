@@ -268,22 +268,26 @@ const requestChallenge = async (req, res) => {
 
     // 1. Cek apakah perangkat sudah di-Approve
     const [deviceRows] = await pool.query(
-      "SELECT status FROM tuser_device WHERE device_id = ? AND user_kode = ?",
-      [device_id, user_kode],
+      "SELECT status FROM tuser_device WHERE device_id = ?",
+      [device_id],
     );
 
     if (deviceRows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        needsEnrollment: true,
-        message: "Perangkat belum terdaftar.",
-      });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          needsEnrollment: true,
+          message: "Perangkat belum terdaftar.",
+        });
     }
     if (deviceRows[0].status !== "APPROVED") {
-      return res.status(403).json({
-        success: false,
-        message: `Perangkat belum disetujui (Status: ${deviceRows[0].status})`,
-      });
+      return res
+        .status(403)
+        .json({
+          success: false,
+          message: `Perangkat belum disetujui (Status: ${deviceRows[0].status})`,
+        });
     }
 
     // 2. Buat string acak (Challenge) sepanjang 32 bytes
@@ -341,21 +345,17 @@ const loginWithDevice = async (req, res) => {
     );
 
     if (deviceRows.length === 0) {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message: "Perangkat ini belum didaftarkan ke sistem.",
-        });
+      return res.status(403).json({
+        success: false,
+        message: "Perangkat ini belum didaftarkan ke sistem.",
+      });
     }
     if (deviceRows[0].status !== "APPROVED") {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message:
-            "Akses perangkat ini masih menunggu persetujuan atau telah dicabut.",
-        });
+      return res.status(403).json({
+        success: false,
+        message:
+          "Akses perangkat ini masih menunggu persetujuan atau telah dicabut.",
+      });
     }
 
     const rawKey = deviceRows[0].public_key;
@@ -375,13 +375,11 @@ const loginWithDevice = async (req, res) => {
     );
 
     if (!isVerified) {
-      return res
-        .status(401)
-        .json({
-          success: false,
-          message:
-            "Verifikasi perangkat gagal! Tanda tangan digital tidak valid.",
-        });
+      return res.status(401).json({
+        success: false,
+        message:
+          "Verifikasi perangkat gagal! Tanda tangan digital tidak valid.",
+      });
     }
 
     // Hapus challenge yang sudah dipakai agar tidak bisa digunakan ulang (1x pakai)
@@ -405,12 +403,10 @@ const loginWithDevice = async (req, res) => {
 
     // Cek kecocokan password kasir yang sedang login
     if (firstUser.user_password !== user_password) {
-      return res
-        .status(401)
-        .json({
-          success: false,
-          message: "Password yang Anda masukkan salah.",
-        });
+      return res.status(401).json({
+        success: false,
+        message: "Password yang Anda masukkan salah.",
+      });
     }
 
     // ==========================================
