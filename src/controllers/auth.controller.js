@@ -306,9 +306,17 @@ const requestChallenge = async (req, res) => {
 
 const loginWithDevice = async (req, res) => {
   try {
-    const { user_kode, device_id, signature, latitude, longitude } = req.body;
+    const {
+      user_kode,
+      user_password, // <-- Pastikan ini diambil
+      device_id,
+      signature,
+      latitude,
+      longitude,
+    } = req.body;
 
-    if (!user_kode || !device_id || !signature) {
+    // Tambahkan user_password ke dalam validasi kelengkapan data
+    if (!user_kode || !user_password || !device_id || !signature) {
       return res
         .status(400)
         .json({ success: false, message: "Data login tidak lengkap." });
@@ -323,20 +331,34 @@ const loginWithDevice = async (req, res) => {
       });
     }
 
-    // 2. Ambil Public Key dari database
+    // ==========================================
+    // 2. CEK STATUS PERANGKAT (BUKTI FISIK HP)
+    // ==========================================
+    // HANYA cek device_id agar semua kasir bisa pakai HP yang sama
     const [deviceRows] = await pool.query(
-      "SELECT public_key, status FROM tuser_device WHERE device_id = ? AND user_kode = ?",
-      [device_id, user_kode],
+      "SELECT public_key, status FROM tuser_device WHERE device_id = ?",
+      [device_id],
     );
 
-    if (deviceRows.length === 0 || deviceRows[0].status !== "APPROVED") {
+    if (deviceRows.length === 0) {
       return res
         .status(403)
-        .json({ success: false, message: "Akses perangkat ditolak." });
+        .json({
+          success: false,
+          message: "Perangkat ini belum didaftarkan ke sistem.",
+        });
+    }
+    if (deviceRows[0].status !== "APPROVED") {
+      return res
+        .status(403)
+        .json({
+          success: false,
+          message:
+            "Akses perangkat ini masih menunggu persetujuan atau telah dicabut.",
+        });
     }
 
     const rawKey = deviceRows[0].public_key;
-    // Pecah string menjadi maksimal 64 karakter per baris (Standar PEM)
     const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${rawKey.match(/.{1,64}/g).join("\n")}\n-----END PUBLIC KEY-----`;
 
     // ==========================================
@@ -355,21 +377,45 @@ const loginWithDevice = async (req, res) => {
     if (!isVerified) {
       return res
         .status(401)
-        .json({ success: false, message: "Tanda tangan digital tidak valid!" });
+        .json({
+          success: false,
+          message:
+            "Verifikasi perangkat gagal! Tanda tangan digital tidak valid.",
+        });
     }
 
     // Hapus challenge yang sudah dipakai agar tidak bisa digunakan ulang (1x pakai)
     challengeStore.delete(device_id);
 
     // ==========================================
-    // 4. LANJUTKAN LOGIKA GEOFENCING & GENERATE TOKEN
+    // 4. VERIFIKASI IDENTITAS KASIR & PASSWORD
     // ==========================================
     const [userRows] = await pool.query(
       "SELECT * FROM tuser WHERE user_kode = ?",
       [user_kode],
     );
+
+    if (userRows.length === 0) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Kode User tidak ditemukan." });
+    }
+
     const firstUser = userRows[0];
 
+    // Cek kecocokan password kasir yang sedang login
+    if (firstUser.user_password !== user_password) {
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: "Password yang Anda masukkan salah.",
+        });
+    }
+
+    // ==========================================
+    // 5. LANJUTKAN LOGIKA GEOFENCING & GENERATE TOKEN
+    // ==========================================
     // Jika MULTI CABANG (Abaikan GPS di tahap ini, pindah ke selectBranch)
     if (userRows.length > 1) {
       const branchCodes = userRows.map((user) => user.user_cab);
@@ -410,7 +456,7 @@ const loginWithDevice = async (req, res) => {
       const gudang = gudangRows.length > 0 ? gudangRows[0] : null;
       const cabangNama = gudang ? gudang.gdg_nama : cabangKode;
 
-      // Logika GPS (Sama persis seperti yang kita buat)
+      // Logika GPS
       if (gudang && gudang.gdg_dc === 0) {
         if (!latitude || !longitude) {
           return res.status(403).json({
