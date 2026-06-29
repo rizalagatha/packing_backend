@@ -89,18 +89,27 @@ const getDetails = async (req, res) => {
       SELECT 
         d.sod_kode,
         IFNULL(b.brgd_barcode, '') AS barcode,
-        TRIM(CONCAT(a.brg_jeniskaos, " ", a.brg_tipe, " ", a.brg_lengan, " ", a.brg_jeniskain, " ", a.brg_warna)) AS nama_barang,
+        
+        -- Urutan prioritas nama: Barang Reguler DC -> DTF -> Custom
+        COALESCE(
+          TRIM(CONCAT(a.brg_jeniskaos, ' ', a.brg_tipe, ' ', a.brg_lengan, ' ', a.brg_jeniskain, ' ', a.brg_warna)),
+          f.sd_nama,
+          d.sod_custom_nama
+        ) AS nama_barang,
+        
         d.sod_ukuran,
         d.sod_jumlah,
         d.sod_scanned
       FROM tso_dtl d
       LEFT JOIN tbarangdc a ON a.brg_kode = d.sod_kode
       LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = d.sod_kode AND b.brgd_ukuran = d.sod_ukuran
+      LEFT JOIN tsodtf_hdr f ON f.sd_nomor = d.sod_kode -- <--- TAMBAHAN JOIN DTF
       WHERE d.sod_so_nomor = ?
       ORDER BY d.sod_nourut
     `;
 
     const [rows] = await pool.query(query, [nomor]);
+
     res.status(200).json({ success: true, data: { items: rows } });
   } catch (error) {
     console.error("Error Mobile SO GetDetails:", error);
