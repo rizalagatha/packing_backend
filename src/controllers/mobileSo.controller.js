@@ -41,28 +41,33 @@ const getList = async (req, res) => {
     const user = req.user;
     const { startDate, endDate, term } = req.query;
 
+    // --- FIX: Hapus h.so_status ---
+    // Karena kita sudah memfilter h.so_close = 0, semua data di sini dipastikan masih OPEN/PROSES.
     let query = `
       SELECT 
         h.so_nomor AS nomor_so, 
         h.so_tanggal AS tanggal, 
-        c.cus_nama AS customer_nama,
-        h.so_status AS status
+        IFNULL(c.cus_nama, 'Customer Umum') AS customer_nama,
+        IF(h.so_close = 0, 'OPEN', 'CLOSE') AS status
       FROM tso_hdr h
       LEFT JOIN tcustomer c ON c.cus_kode = h.so_cus_kode
       WHERE h.so_cab = ? AND h.so_aktif = 'Y' AND h.so_close = 0
     `;
     const params = [user.cabang];
 
+    // Filter Tanggal
     if (startDate && endDate) {
       query += ` AND h.so_tanggal BETWEEN ? AND ?`;
       params.push(startDate, endDate);
     }
 
+    // Filter Pencarian (Nomor SO atau Nama Customer)
     if (term) {
       query += ` AND (h.so_nomor LIKE ? OR c.cus_nama LIKE ?)`;
       params.push(`%${term}%`, `%${term}%`);
     }
 
+    // Urutkan dari yang terbaru, batasi 50 agar ringan saat di-scroll di HP
     query += ` ORDER BY h.so_tanggal DESC, h.so_nomor DESC LIMIT 50`;
 
     const [rows] = await pool.query(query, params);
