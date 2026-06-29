@@ -234,27 +234,27 @@ const enrollDevice = async (req, res) => {
 
     const userCabang = userRows[0].user_cab;
 
-    // 2. Simpan ke database dengan kolom cabang baru
+    // ==========================================
+    // 2. HAPUS DATA LAMA & SIMPAN DATA BARU
+    // ==========================================
+    // Hapus data perangkat ini jika sebelumnya sudah pernah terdaftar (mencegah duplikat)
+    await pool.query("DELETE FROM tuser_device WHERE device_id = ?", [
+      device_id,
+    ]);
+
+    // Simpan kunci baru yang segar
     await pool.query(
       `INSERT INTO tuser_device (device_id, user_kode, cabang, public_key, device_name, status, created_at) 
-       VALUES (?, ?, ?, ?, ?, 'PENDING', NOW()) 
-       ON DUPLICATE KEY UPDATE public_key = ?, user_kode = ?, cabang = ?, status = 'PENDING', created_at = NOW()`,
-      [
-        device_id,
-        user_kode,
-        userCabang,
-        public_key,
-        device_name,
-        public_key,
-        user_kode,
-        userCabang,
-      ],
+       VALUES (?, ?, ?, ?, ?, 'PENDING', NOW())`,
+      [device_id, user_kode, userCabang, public_key, device_name],
     );
 
-    res.status(200).json({
-      success: true,
-      message: "Perangkat berhasil didaftarkan. Menunggu approval.",
-    });
+    res
+      .status(200)
+      .json({
+        success: true,
+        message: "Perangkat berhasil didaftarkan. Menunggu approval.",
+      });
   } catch (error) {
     console.error("Enroll Error:", error);
     res
