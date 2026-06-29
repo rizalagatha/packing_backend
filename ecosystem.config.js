@@ -1,3 +1,5 @@
+require("dotenv").config(); // Panggil dotenv di sini
+
 module.exports = {
   apps: [
     {
@@ -16,12 +18,12 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: 3000,
-        DB_HOST: "103.94.238.252",
-        DB_USER: "root",
-        DB_PASSWORD: "Kencana#123",
-        DB_DATABASE: "retail",
-        DB_PORT: 3306,
-        JWT_SECRET: "s+qG0PB3JQB/jHABdHfVejMBUm9zJtE4Mb1GHMAYXsw=",
+        DB_HOST: process.env.DB_HOST,
+        DB_USER: process.env.DB_USER,
+        DB_PASSWORD: process.env.DB_PASSWORD,
+        DB_DATABASE: process.env.DB_NAME_PROD, // Pakai DB Prod
+        DB_PORT: process.env.DB_PORT,
+        JWT_SECRET: process.env.JWT_SECRET,
       },
     },
     {
@@ -38,14 +40,14 @@ module.exports = {
       ],
       max_memory_restart: "1G",
       env: {
-        NODE_ENV: "production", // Tetap production agar efisien
-        PORT: 3002, // PORT BERBEDA
-        DB_HOST: "103.94.238.252",
-        DB_USER: "root",
-        DB_PASSWORD: "Kencana#123",
-        DB_DATABASE: "retailnew", // DATABASE BERBEDA
-        DB_PORT: 3306,
-        JWT_SECRET: "s+qG0PB3JQB/jHABdHfVejMBUm9zJtE4Mb1GHMAYXsw=",
+        NODE_ENV: "production",
+        PORT: 3002,
+        DB_HOST: process.env.DB_HOST,
+        DB_USER: process.env.DB_USER,
+        DB_PASSWORD: process.env.DB_PASSWORD,
+        DB_DATABASE: process.env.DB_NAME_TRIAL, // Pakai DB Trial
+        DB_PORT: process.env.DB_PORT,
+        JWT_SECRET: process.env.JWT_SECRET,
       },
     },
     {
@@ -62,13 +64,13 @@ module.exports = {
       ],
       env: {
         NODE_ENV: "development",
-        PORT: 3004, // Gunakan port berbeda khusus lokal
-        DB_HOST: "103.94.238.252", // Tetap tembak DB Server (atau 127.0.0.1 jika DB ada di laptop)
-        DB_USER: "root", // Isi sesuai kredensial Anda
-        DB_PASSWORD: "Kencana#123",
-        DB_DATABASE: "retailnew", // Gunakan DB Trial agar aman untuk testing-testing
-        DB_PORT: 3306,
-        JWT_SECRET: "s+qG0PB3JQB/jHABdHfVejMBUm9zJtE4Mb1GHMAYXsw=",
+        PORT: 3004,
+        DB_HOST: process.env.DB_HOST,
+        DB_USER: process.env.DB_USER,
+        DB_PASSWORD: process.env.DB_PASSWORD,
+        DB_DATABASE: process.env.DB_NAME_TRIAL, // Pakai DB Trial
+        DB_PORT: process.env.DB_PORT,
+        JWT_SECRET: process.env.JWT_SECRET,
       },
     },
   ],
