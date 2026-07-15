@@ -6,6 +6,7 @@ const { authenticateToken } = require("../middlewares/auth.middleware");
 router.use(authenticateToken);
 router.get("/rekening", penjualanController.searchRekening);
 router.get("/promos", penjualanController.getActivePromos);
+router.get("/promo-items/:nomor", penjualanController.getPromoItems);
 router.get("/default-customer", penjualanController.getDefaultCustomer);
 router.get("/scan/:barcode", penjualanController.findProductByBarcode);
 router.post("/save", penjualanController.savePenjualan);

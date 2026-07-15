@@ -475,26 +475,64 @@ const savePenjualan = async (req, res) => {
     if (connection) connection.release();
   }
 };
-// 5. Get Active Promos
+
 const getActivePromos = async (req, res) => {
   try {
     const { tanggal } = req.query;
     const { cabang } = req.user;
 
     const query = `
-            SELECT 
-                p.pro_nomor, p.pro_judul, p.pro_totalrp, p.pro_disrp
-            FROM tpromo p
-            INNER JOIN tpromo_cabang c ON c.pc_nomor = p.pro_nomor AND c.pc_cab = ?
-            WHERE p.pro_f1 = "N" -- Promo otomatis/header
-              AND ? BETWEEN p.pro_tanggal1 AND p.pro_tanggal2;
-        `;
-
+      SELECT 
+        p.pro_nomor, p.pro_judul, p.pro_totalrp, p.pro_totalqty,
+        p.pro_disrp, p.pro_dispersen, p.pro_lipat, p.pro_jenis, p.pro_f1,
+        p.pro_tanggal1, p.pro_tanggal2,
+        p.pro_basis, p.pro_exclude_kode, p.pro_include_kata, p.pro_mode_barang,
+        p.pro_no_maps, p.pro_no_disc_member,
+        (
+          SELECT JSON_ARRAYAGG(ple_level)
+          FROM tpromo_level_exclude
+          WHERE ple_nomor = p.pro_nomor
+        ) AS level_exclude
+      FROM tpromo p
+      INNER JOIN tpromo_cabang c ON c.pc_nomor = p.pro_nomor AND c.pc_cab = ?
+      WHERE p.pro_f1 = "N"
+        AND ? BETWEEN p.pro_tanggal1 AND p.pro_tanggal2;
+    `;
     const [rows] = await pool.query(query, [cabang, tanggal]);
-    res.status(200).json({ success: true, data: rows });
+
+    const promos = rows.map((p) => ({
+      ...p,
+      level_exclude: p.level_exclude ? JSON.parse(p.level_exclude) : [],
+      pro_no_maps: p.pro_no_maps === 1,
+      pro_no_disc_member: p.pro_no_disc_member === 1,
+    }));
+
+    res.status(200).json({ success: true, data: promos });
   } catch (error) {
     console.error("Error getActivePromos:", error);
     res.status(500).json({ success: false, message: "Gagal memuat promo." });
+  }
+};
+
+const getPromoItems = async (req, res) => {
+  try {
+    const { nomor } = req.params;
+    const query = `
+      SELECT 
+        p.pb_brg_kode AS kode,
+        p.pb_ukuran   AS ukuran,
+        p.pb_disc     AS discPersen,
+        p.pb_diskon   AS discRp
+      FROM tpromo_barang p
+      WHERE p.pb_nomor = ?
+    `;
+    const [rows] = await pool.query(query, [nomor]);
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error getPromoItems:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal memuat item promo." });
   }
 };
 
@@ -759,7 +797,8 @@ module.exports = {
   savePenjualan,
   searchRekening,
   getActivePromos,
-  getPrintData, // -> Baru
-  sendReceiptWa, // -> Baru
+  getPromoItems,
+  getPrintData,
+  sendReceiptWa,
   sendReceiptWaImage,
 };
