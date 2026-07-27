@@ -62,7 +62,7 @@ const searchBarang = async (req, res) => {
         AND b.brg_jenis = ?
         ${ktgFilter}
         AND (b.brg_kode LIKE ? OR b.brg_nama LIKE ?)
-      ORDER BY b.brg_nama ASC
+      ORDER BY b.brg_nama ASC, b.brg_kode ASC
     `;
 
     const [rows] = await pool.query(query, [
