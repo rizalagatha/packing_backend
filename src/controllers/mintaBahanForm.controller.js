@@ -22,7 +22,7 @@ const generateNomor = async (connection, jenis, tanggal) => {
 const searchBarang = async (req, res) => {
   try {
     const { keyword, jenis } = req.query;
-    const cabangStok = "P04";
+    const cabangStok = "P04"; // Stok fisik aksesoris/obat ada di P04, BUKAN P03
 
     if (!jenis || !["ACCESORIES", "OBAT"].includes(jenis)) {
       return res.status(400).json({
@@ -66,7 +66,7 @@ const searchBarang = async (req, res) => {
     `;
 
     const [rows] = await pool.query(query, [
-      cabang,
+      cabangStok,
       jenis,
       searchTerm,
       searchTerm,
