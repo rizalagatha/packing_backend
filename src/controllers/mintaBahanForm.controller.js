@@ -8,7 +8,7 @@ const generateNomor = async (connection, jenis, tanggal) => {
 
   const query = `
     SELECT IFNULL(MAX(CAST(RIGHT(min_nomor, 5) AS UNSIGNED)), 0) + 1 AS next_num
-    FROM kencanaprint.tgarmenminta_hdr 
+    FROM kencanaprintnew.tgarmenminta_hdr 
     WHERE min_nomor LIKE ?;
   `;
   const [rows] = await connection.query(query, [`${prefix}%`]);
@@ -34,14 +34,14 @@ const searchBarang = async (req, res) => {
     const searchTerm = `%${keyword || ""}%`;
 
     let ktgFilter = "";
-    let stockTable = "kencanaprint.tmasterstok_acc";
+    let stockTable = "kencanaprintnew.tmasterstok_acc";
 
     if (jenis === "ACCESORIES") {
       ktgFilter = `AND b.brg_ktg = 'STORE'`;
-      stockTable = "kencanaprint.tmasterstok_acc";
+      stockTable = "kencanaprintnew.tmasterstok_acc";
     } else if (jenis === "OBAT") {
       ktgFilter = `AND b.brg_ktg = 'DTF'`;
-      stockTable = "kencanaprint.tmasterstok_obat";
+      stockTable = "kencanaprintnew.tmasterstok_obat";
     }
 
     const query = `
@@ -57,7 +57,7 @@ const searchBarang = async (req, res) => {
             AND m.mst_cab = ? 
             AND m.mst_brg_kode = b.brg_kode
         ), 0) AS stok
-      FROM kencanaprint.tgarmen_brg b
+      FROM kencanaprintnew.tgarmen_brg b
       WHERE b.brg_aktif = 'Y' 
         AND b.brg_jenis = ?
         ${ktgFilter}
@@ -93,7 +93,7 @@ const getForEdit = async (req, res) => {
         min_ket AS keterangan,
         min_close,
         user_create
-      FROM kencanaprint.tgarmenminta_hdr
+      FROM kencanaprintnew.tgarmenminta_hdr
       WHERE min_nomor = ?
     `;
     const [headerRows] = await pool.query(headerQuery, [nomor]);
@@ -110,8 +110,8 @@ const getForEdit = async (req, res) => {
         b.brg_satuan AS satuan,
         d.mind_jumlah AS jumlah,
         d.mind_ket AS keterangan
-      FROM kencanaprint.tgarmenminta_dtl d
-      LEFT JOIN kencanaprint.tgarmen_brg b ON b.brg_kode = d.mind_brg_kode
+      FROM kencanaprintnew.tgarmenminta_dtl d
+      LEFT JOIN kencanaprintnew.tgarmen_brg b ON b.brg_kode = d.mind_brg_kode
       WHERE d.mind_nomor = ?
       ORDER BY d.mind_urut ASC
     `;
@@ -159,7 +159,7 @@ const save = async (req, res) => {
       nomorPermintaan = await generateNomor(connection, jenis, header.tanggal);
 
       await connection.query(
-        `INSERT INTO kencanaprint.tgarmenminta_hdr 
+        `INSERT INTO kencanaprintnew.tgarmenminta_hdr 
          (min_jenis, min_nomor, min_tanggal, min_cab, min_bagian, min_ket, date_create, user_create, min_close) 
          VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, 0)`,
         [
@@ -174,7 +174,7 @@ const save = async (req, res) => {
       );
     } else {
       const [cekRows] = await connection.query(
-        `SELECT min_close FROM kencanaprint.tgarmenminta_hdr WHERE min_nomor = ?`,
+        `SELECT min_close FROM kencanaprintnew.tgarmenminta_hdr WHERE min_nomor = ?`,
         [nomorPermintaan],
       );
       if (cekRows.length === 0) throw new Error("Data tidak ditemukan.");
@@ -183,7 +183,7 @@ const save = async (req, res) => {
       }
 
       await connection.query(
-        `UPDATE kencanaprint.tgarmenminta_hdr SET 
+        `UPDATE kencanaprintnew.tgarmenminta_hdr SET 
            min_tanggal = ?, 
            min_ket = ?, 
            date_modified = NOW(), 
@@ -193,7 +193,7 @@ const save = async (req, res) => {
       );
 
       await connection.query(
-        `DELETE FROM kencanaprint.tgarmenminta_dtl WHERE mind_nomor = ?`,
+        `DELETE FROM kencanaprintnew.tgarmenminta_dtl WHERE mind_nomor = ?`,
         [nomorPermintaan],
       );
     }
@@ -218,7 +218,7 @@ const save = async (req, res) => {
     ]);
 
     await connection.query(
-      `INSERT INTO kencanaprint.tgarmenminta_dtl 
+      `INSERT INTO kencanaprintnew.tgarmenminta_dtl 
        (mind_nomor, mind_brg_kode, mind_jumlah, mind_pcs, mind_pemakaian, mind_ket, mind_urut) 
        VALUES ?`,
       [detailValues],
