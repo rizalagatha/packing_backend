@@ -112,6 +112,9 @@ app.use("/api/mobile/so", mobileSoRoutes);
 const mintaBahanRoutes = require("./src/routes/mintaBahan.routes.js");
 app.use("/api/minta-bahan", mintaBahanRoutes);
 
+const mintaBahanFormRoutes = require("./src/routes/mintaBahanForm.routes.js");
+app.use("/api/minta-bahan-form", mintaBahanFormRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.use((err, req, res, next) => {
