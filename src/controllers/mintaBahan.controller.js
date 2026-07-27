@@ -161,7 +161,8 @@ const checkUnapproved = async (req, res) => {
       SELECT IFNULL(COUNT(*), 0) AS blmApv
       FROM kencanaprint.tgarmenrealisasi_hdr h
       INNER JOIN kencanaprint.tgarmenminta_hdr a ON a.min_nomor = h.re_minta AND a.user_create = ?
-      WHERE h.re_minta LIKE 'MIA%' AND h.re_apv IS NULL AND h.re_tanggal < DATE_ADD(CURDATE(), INTERVAL -1 DAY)
+      WHERE (h.re_minta LIKE 'MIA%' OR h.re_minta LIKE 'MIO%')
+        AND h.re_apv IS NULL
     `;
     const [rows] = await pool.query(query, [user.kode]);
 
