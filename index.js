@@ -109,6 +109,9 @@ app.use("/api/lost-order", lostOrderRoutes);
 const mobileSoRoutes = require("./src/routes/mobileSo.routes.js");
 app.use("/api/mobile/so", mobileSoRoutes);
 
+const mintaBahanRoutes = require("./src/routes/mintaBahan.routes.js");
+app.use("/api/minta-bahan", mintaBahanRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.use((err, req, res, next) => {
