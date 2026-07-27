@@ -22,7 +22,7 @@ const generateNomor = async (connection, jenis, tanggal) => {
 const searchBarang = async (req, res) => {
   try {
     const { keyword, jenis } = req.query;
-    const cabang = "P03"; // Terkunci P03, sama seperti web
+    const cabangStok = "P04";
 
     if (!jenis || !["ACCESORIES", "OBAT"].includes(jenis)) {
       return res.status(400).json({
