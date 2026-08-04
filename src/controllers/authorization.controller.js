@@ -220,6 +220,7 @@ const getPendingRequests = async (req, res) => {
       "TRANSFER_SOP",
       "DISKON_FAKTUR",
       "SO_TANPA_DP",
+      "SO_DTF_TANPA_DP",
       "BELUM_LUNAS",
       "DISKON_ITEM",
       "PIUTANG",
