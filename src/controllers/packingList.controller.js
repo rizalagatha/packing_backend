@@ -321,7 +321,7 @@ const searchPermintaanOpen = async (req, res) => {
     const query = `
         SELECT 
             h.mt_nomor AS nomor, 
-            h.mt_tanggal AS tanggal, 
+            DATE_FORMAT(h.mt_tanggal, '%Y-%m-%d') AS tanggal, 
             h.mt_otomatis AS otomatis, 
             h.mt_ket AS keterangan
         FROM tmintabarang_hdr h
