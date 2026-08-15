@@ -347,7 +347,8 @@ const searchPermintaanOpen = async (req, res) => {
             h.mt_nomor AS nomor, 
             DATE_FORMAT(h.mt_tanggal, '%Y-%m-%d') AS tanggal, 
             h.mt_otomatis AS otomatis, 
-            h.mt_ket AS keterangan
+            h.mt_ket AS keterangan,
+            DATE_FORMAT(h.date_create, '%d-%m-%Y %H:%i:%s') AS date_create
         FROM tmintabarang_hdr h
         WHERE 
             -- 1. Filter Store (Wajib sama 3 digit awal)
