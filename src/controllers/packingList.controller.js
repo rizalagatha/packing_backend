@@ -181,11 +181,21 @@ const getPackingListDetail = async (req, res) => {
         b.brgd_barcode AS barcode,
         
         -- Hitung Stok KDC (Pusat)
-        IFNULL((
-           SELECT SUM(m.mst_stok_in - m.mst_stok_out) FROM tmasterstok m 
-           WHERE m.mst_aktif='Y' AND m.mst_cab='KDC' 
-             AND m.mst_brg_kode=d.pld_kode AND m.mst_ukuran=d.pld_ukuran
-        ), 0) AS stok
+        (IFNULL((
+           SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
+           FROM tmasterstok m 
+           WHERE m.mst_aktif='Y' 
+             AND m.mst_cab='KDC' 
+             AND m.mst_brg_kode=d.mtd_kode 
+             AND m.mst_ukuran=d.mtd_ukuran
+        ), 0) - IFNULL((
+           SELECT SUM(pld.pld_jumlah)
+           FROM tpacking_list_dtl pld
+           JOIN tpacking_list_hdr plh ON pld.pld_nomor = plh.pl_nomor
+           WHERE pld.pld_kode = d.mtd_kode 
+             AND pld.pld_ukuran = d.mtd_ukuran 
+             AND plh.pl_status = 'O'
+        ), 0)) AS stok
 
       FROM tpacking_list_dtl d
       LEFT JOIN tbarangdc a ON a.brg_kode = d.pld_kode
@@ -224,14 +234,21 @@ const loadItemsFromRequest = async (req, res) => {
         b.brgd_barcode AS barcode,
         
         -- Hitung Stok DC (KDC) saat ini untuk referensi
-        IFNULL((
+        (IFNULL((
            SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
            FROM tmasterstok m 
            WHERE m.mst_aktif='Y' 
              AND m.mst_cab='KDC' 
              AND m.mst_brg_kode=d.mtd_kode 
              AND m.mst_ukuran=d.mtd_ukuran
-        ), 0) AS stok
+        ), 0) - IFNULL((
+           SELECT SUM(pld.pld_jumlah)
+           FROM tpacking_list_dtl pld
+           JOIN tpacking_list_hdr plh ON pld.pld_nomor = plh.pl_nomor
+           WHERE pld.pld_kode = d.mtd_kode 
+             AND pld.pld_ukuran = d.mtd_ukuran 
+             AND plh.pl_status = 'O'
+        ), 0)) AS stok
 
       FROM tmintabarang_dtl d
       LEFT JOIN tbarangdc a ON a.brg_kode = d.mtd_kode
@@ -266,12 +283,19 @@ const findProductByBarcode = async (req, res) => {
         d.brgd_ukuran AS ukuran,
         d.brgd_barcode AS barcode,
         
-        -- Stok KDC
-        IFNULL((
+        -- Hitung Stok DC (KDC) Tersedia
+        (IFNULL((
            SELECT SUM(m.mst_stok_in - m.mst_stok_out) FROM tmasterstok m 
            WHERE m.mst_aktif='Y' AND m.mst_cab='KDC' 
              AND m.mst_brg_kode=d.brgd_kode AND m.mst_ukuran=d.brgd_ukuran
-        ), 0) AS stok
+        ), 0) - IFNULL((
+           SELECT SUM(pld.pld_jumlah)
+           FROM tpacking_list_dtl pld
+           JOIN tpacking_list_hdr plh ON pld.pld_nomor = plh.pl_nomor
+           WHERE pld.pld_kode = d.brgd_kode 
+             AND pld.pld_ukuran = d.brgd_ukuran 
+             AND plh.pl_status = 'O'
+        ), 0)) AS stok
 
       FROM tbarangdc_dtl d
       LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
