@@ -452,6 +452,7 @@ module.exports = {
   getAll,
   getDetails,
   checkUnapproved,
+  approveRealisasi,
   deletePermintaan,
   getExportSummary,
 };
