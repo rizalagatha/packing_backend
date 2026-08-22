@@ -369,10 +369,10 @@ const getExportSummary = async (req, res) => {
       });
     }
 
-    // Ambil semua detail permintaan dalam rentang tanggal, dikelompokkan per toko (min_ket)
     const query = `
       SELECT 
         h.min_ket AS Toko,
+        h.min_jenis AS Jenis,
         h.min_nomor AS Nomor,
         d.mind_brg_kode AS Kode,
         IF(b.brg_note="", b.brg_nama, CONCAT(b.brg_nama," - ",b.brg_note)) AS Nama,
@@ -388,47 +388,65 @@ const getExportSummary = async (req, res) => {
     `;
     const [rows] = await pool.query(query, [startDate, endDate]);
 
-    // Group by Toko (dari keterangan), lalu breakdown per barang
+    // Struktur: tokoMap -> { toko, totalJumlah, jenisMap: { ACCESORIES: {...}, OBAT: {...} } }
     const tokoMap = new Map();
 
     for (const row of rows) {
       const tokoKey =
         (row.Toko || "TANPA KETERANGAN").trim() || "TANPA KETERANGAN";
+      const jenisKey = row.Jenis; // 'ACCESORIES' atau 'OBAT'
 
       if (!tokoMap.has(tokoKey)) {
         tokoMap.set(tokoKey, {
           toko: tokoKey,
-          totalPermintaan: new Set(),
           totalJumlah: 0,
-          items: new Map(), // key: kode||satuan -> {kode, nama, satuan, jumlah}
+          jenisMap: new Map(), // key: jenis -> { totalPermintaan: Set, totalJumlah, items: Map }
         });
       }
+      const tokoEntry = tokoMap.get(tokoKey);
+      tokoEntry.totalJumlah += Number(row.Jumlah || 0);
 
-      const entry = tokoMap.get(tokoKey);
-      entry.totalPermintaan.add(row.Nomor);
-      entry.totalJumlah += Number(row.Jumlah || 0);
+      if (!tokoEntry.jenisMap.has(jenisKey)) {
+        tokoEntry.jenisMap.set(jenisKey, {
+          jenis: jenisKey,
+          totalPermintaan: new Set(),
+          totalJumlah: 0,
+          items: new Map(),
+        });
+      }
+      const jenisEntry = tokoEntry.jenisMap.get(jenisKey);
+      jenisEntry.totalPermintaan.add(row.Nomor);
+      jenisEntry.totalJumlah += Number(row.Jumlah || 0);
 
       const itemKey = `${row.Kode}||${row.Satuan}`;
-      if (!entry.items.has(itemKey)) {
-        entry.items.set(itemKey, {
+      if (!jenisEntry.items.has(itemKey)) {
+        jenisEntry.items.set(itemKey, {
           kode: row.Kode,
           nama: row.Nama,
           satuan: row.Satuan,
           jumlah: 0,
         });
       }
-      entry.items.get(itemKey).jumlah += Number(row.Jumlah || 0);
+      jenisEntry.items.get(itemKey).jumlah += Number(row.Jumlah || 0);
     }
 
-    // Ubah ke array, urutkan toko dari total jumlah terbanyak ke terendah
+    // Urutkan toko dari total jumlah terbanyak ke terendah,
+    // lalu di dalamnya urutkan jenis (ACCESORIES dulu baru OBAT — atau alfabetis),
+    // dan item per jenis diurutkan dari jumlah terbanyak ke terendah.
     const summary = Array.from(tokoMap.values())
-      .map((entry) => ({
-        toko: entry.toko,
-        totalPermintaan: entry.totalPermintaan.size,
-        totalJumlah: entry.totalJumlah,
-        items: Array.from(entry.items.values()).sort(
-          (a, b) => b.jumlah - a.jumlah,
-        ),
+      .map((tokoEntry) => ({
+        toko: tokoEntry.toko,
+        totalJumlah: tokoEntry.totalJumlah,
+        jenisList: Array.from(tokoEntry.jenisMap.values())
+          .map((jenisEntry) => ({
+            jenis: jenisEntry.jenis,
+            totalPermintaan: jenisEntry.totalPermintaan.size,
+            totalJumlah: jenisEntry.totalJumlah,
+            items: Array.from(jenisEntry.items.values()).sort(
+              (a, b) => b.jumlah - a.jumlah,
+            ),
+          }))
+          .sort((a, b) => a.jenis.localeCompare(b.jenis)), // ACCESORIES sebelum OBAT
       }))
       .sort((a, b) => b.totalJumlah - a.totalJumlah);
 
