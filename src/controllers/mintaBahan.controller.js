@@ -1,5 +1,9 @@
 const pool = require("../config/database");
 const { format } = require("date-fns");
+const {
+  getTanggalTutupBukuUntukTanggal,
+  getManualTutupBuku,
+} = require("../utils/tutupBuku.util");
 
 // GET /api/minta-bahan  (Browse)
 const getAll = async (req, res) => {
@@ -266,9 +270,188 @@ const approveRealisasi = async (req, res) => {
   }
 };
 
+// DELETE /api/minta-bahan/:nomor
+const deletePermintaan = async (req, res) => {
+  const { nomor } = req.params;
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // 1. Cek Status Eksistensi
+    const [rows] = await connection.query(
+      `SELECT min_cab, min_tanggal, IF(min_close=0, "OPEN", IF(min_close=1, "CLOSE", IF(min_close=9, "DICLOSE", "PROSES"))) AS sts 
+       FROM kencanaprint.tgarmenminta_hdr WHERE min_nomor = ?`,
+      [nomor],
+    );
+    if (rows.length === 0) {
+      throw new Error("Data tidak ditemukan.");
+    }
+
+    const data = rows[0];
+
+    if (data.min_cab !== "P03") {
+      throw new Error("Bukan hak akses wilayah cabang P03.");
+    }
+
+    if (data.sts !== "OPEN") {
+      throw new Error(`Sudah ${data.sts}. Tidak bisa dihapus.`);
+    }
+
+    // 2. Cegah hapus jika sudah ada realisasi (walau belum full)
+    const [realisasiRows] = await connection.query(
+      `SELECT COUNT(*) AS total FROM kencanaprint.tgarmenrealisasi_hdr WHERE re_minta = ?`,
+      [nomor],
+    );
+    if (realisasiRows[0].total > 0) {
+      throw new Error(
+        "Permintaan sudah memiliki realisasi, tidak bisa dihapus.",
+      );
+    }
+
+    // 3. Validasi Tutup Buku — pakai logika resmi sama seperti MANKSI
+    const zdtCloseOtomatis = await getTanggalTutupBukuUntukTanggal(
+      data.min_tanggal,
+    );
+    const tglTrs = new Date(data.min_tanggal);
+
+    if (tglTrs <= zdtCloseOtomatis) {
+      throw new Error(
+        "Transaksi tsb sudah tutup buku (closing otomatis). Tidak bisa dihapus.",
+      );
+    }
+
+    // cid di pengaturan.tclose tetap "MINTA ACCESORIES" untuk kedua jenis
+    // (ACCESORIES & OBAT) — format lama sebelum digabung jadi satu modul barang garmen
+    const zdtCloseManual = await getManualTutupBuku("MINTA ACCESORIES");
+    if (zdtCloseManual && tglTrs <= zdtCloseManual) {
+      throw new Error(
+        "Transaksi tsb sudah tutup buku (closing manual). Tidak bisa dihapus.",
+      );
+    }
+    // 4. Eksekusi Hapus
+    await connection.query(
+      `DELETE FROM kencanaprint.tgarmenminta_hdr WHERE min_nomor = ?`,
+      [nomor],
+    );
+    await connection.query(
+      `DELETE FROM kencanaprint.tgarmenminta_dtl WHERE mind_nomor = ?`,
+      [nomor],
+    );
+
+    await connection.commit();
+    res.status(200).json({
+      success: true,
+      message: "Data permintaan berhasil dihapus.",
+    });
+  } catch (error) {
+    await connection.rollback();
+    const isValidationError = [
+      "tidak ditemukan",
+      "tidak bisa dihapus",
+      "bukan hak akses",
+    ].some((msg) => error.message.toLowerCase().includes(msg));
+    res
+      .status(isValidationError ? 400 : 500)
+      .json({ success: false, message: error.message });
+  } finally {
+    connection.release();
+  }
+};
+
+// GET /api/minta-bahan/export-summary?startDate=&endDate=
+const getExportSummary = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Tanggal awal dan akhir wajib diisi.",
+      });
+    }
+
+    // Ambil semua detail permintaan dalam rentang tanggal, dikelompokkan per toko (min_ket)
+    const query = `
+      SELECT 
+        h.min_ket AS Toko,
+        h.min_nomor AS Nomor,
+        d.mind_brg_kode AS Kode,
+        IF(b.brg_note="", b.brg_nama, CONCAT(b.brg_nama," - ",b.brg_note)) AS Nama,
+        b.brg_satuan AS Satuan,
+        d.mind_jumlah AS Jumlah
+      FROM kencanaprint.tgarmenminta_hdr h
+      INNER JOIN kencanaprint.tgarmenminta_dtl d ON d.mind_nomor = h.min_nomor
+      LEFT JOIN kencanaprint.tgarmen_brg b ON b.brg_kode = d.mind_brg_kode
+      WHERE h.min_cab = 'P03'
+        AND h.min_jenis IN ('OBAT', 'ACCESORIES')
+        AND h.min_tanggal >= ? AND h.min_tanggal <= ?
+      ORDER BY h.min_ket ASC
+    `;
+    const [rows] = await pool.query(query, [startDate, endDate]);
+
+    // Group by Toko (dari keterangan), lalu breakdown per barang
+    const tokoMap = new Map();
+
+    for (const row of rows) {
+      const tokoKey =
+        (row.Toko || "TANPA KETERANGAN").trim() || "TANPA KETERANGAN";
+
+      if (!tokoMap.has(tokoKey)) {
+        tokoMap.set(tokoKey, {
+          toko: tokoKey,
+          totalPermintaan: new Set(),
+          totalJumlah: 0,
+          items: new Map(), // key: kode||satuan -> {kode, nama, satuan, jumlah}
+        });
+      }
+
+      const entry = tokoMap.get(tokoKey);
+      entry.totalPermintaan.add(row.Nomor);
+      entry.totalJumlah += Number(row.Jumlah || 0);
+
+      const itemKey = `${row.Kode}||${row.Satuan}`;
+      if (!entry.items.has(itemKey)) {
+        entry.items.set(itemKey, {
+          kode: row.Kode,
+          nama: row.Nama,
+          satuan: row.Satuan,
+          jumlah: 0,
+        });
+      }
+      entry.items.get(itemKey).jumlah += Number(row.Jumlah || 0);
+    }
+
+    // Ubah ke array, urutkan toko dari total jumlah terbanyak ke terendah
+    const summary = Array.from(tokoMap.values())
+      .map((entry) => ({
+        toko: entry.toko,
+        totalPermintaan: entry.totalPermintaan.size,
+        totalJumlah: entry.totalJumlah,
+        items: Array.from(entry.items.values()).sort(
+          (a, b) => b.jumlah - a.jumlah,
+        ),
+      }))
+      .sort((a, b) => b.totalJumlah - a.totalJumlah);
+
+    const grandTotal = summary.reduce((sum, s) => sum + s.totalJumlah, 0);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        periode: { startDate, endDate },
+        summary,
+        grandTotal,
+      },
+    });
+  } catch (error) {
+    console.error("Error getExportSummary mintaBahan:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getAll,
   getDetails,
   checkUnapproved,
-  approveRealisasi,
+  deletePermintaan,
+  getExportSummary,
 };
