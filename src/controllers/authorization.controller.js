@@ -101,11 +101,12 @@ const createRequest = async (req, res) => {
         const isEstuManagerPeriod =
           today >= new Date(2026, 0, 12) && today < new Date(2026, 0, 17);
         const isPeminjaman = String(o_jenis).trim() === "PEMINJAMAN_BARANG";
-        const isKlaimPettyCash = String(o_jenis).trim() === "KLAIM_PETTYCASH"; // [TAMBAH INI]
+        const isKlaimPettyCash = String(o_jenis).trim() === "KLAIM_PETTYCASH";
         const isSubmitBap = String(o_jenis).trim() === "SUBMIT_BAP";
         const isClosePenawaran = String(o_jenis).trim() === "CLOSE_PENAWARAN";
         const isCloseSoDtf = String(o_jenis).trim() === "CLOSE_SO_DTF";
         const isCloseSo = String(o_jenis).trim() === "CLOSE_SO";
+        const isClosePh = String(o_jenis).trim() === "CLOSE_PH";
 
         let managerCodes = ["DARUL"]; // Darul selalu dikirim
 
@@ -115,7 +116,8 @@ const createRequest = async (req, res) => {
           isSubmitBap ||
           isClosePenawaran ||
           isCloseSoDtf ||
-          isCloseSo
+          isCloseSo ||
+          isClosePh
         ) {
           if (!managerCodes.includes("ESTU")) managerCodes.push("ESTU");
         }
@@ -130,7 +132,8 @@ const createRequest = async (req, res) => {
             !isSubmitBap &&
             !isClosePenawaran &&
             !isCloseSoDtf &&
-            !isCloseSo
+            !isCloseSo &&
+            !isClosePh
           ) {
             managerCodes.push("HARIS");
           }
@@ -227,6 +230,7 @@ const getPendingRequests = async (req, res) => {
       "CLOSE_PENAWARAN",
       "CLOSE_SO_DTF",
       "CLOSE_SO",
+      "CLOSE_PH",
     ];
 
     if (user.cabang === "KDC") {
@@ -244,6 +248,7 @@ const getPendingRequests = async (req, res) => {
           "CLOSE_PENAWARAN",
           "CLOSE_SO_DTF",
           "CLOSE_SO",
+          "CLOSE_PH",
         ]);
       } else if (userKodeUpper === "HARIS") {
         if (isEstuManagerPeriod) {
@@ -324,6 +329,7 @@ const processRequest = async (req, res) => {
       "CLOSE_PENAWARAN",
       "CLOSE_SO_DTF",
       "CLOSE_SO",
+      "CLOSE_PH",
     ];
     if (managerTypes.includes(o_jenis) && user.cabang !== "KDC") {
       return res.status(403).json({
@@ -351,6 +357,7 @@ const processRequest = async (req, res) => {
       const isClosePenawaran = o_jenis === "CLOSE_PENAWARAN";
       const isCloseSoDtf = o_jenis === "CLOSE_SO_DTF";
       const isCloseSo = o_jenis === "CLOSE_SO";
+      const isClosePh = o_jenis === "CLOSE_PH";
 
       if (
         !isPeminjaman &&
@@ -359,6 +366,7 @@ const processRequest = async (req, res) => {
         !isClosePenawaran &&
         !isCloseSoDtf &&
         !isCloseSo &&
+        !isClosePh &&
         !isEstuManagerPeriod
       ) {
         return res.status(403).json({
