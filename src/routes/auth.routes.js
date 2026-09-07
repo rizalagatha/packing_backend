@@ -15,6 +15,8 @@ router.post("/login", authController.login);
 router.post("/enroll-device", authController.enrollDevice); // Pendaftaran perangkat baru
 router.post("/request-challenge", authController.requestChallenge); // Minta string acak untuk ditandatangani
 router.post("/login-device", authController.loginWithDevice); // Login menggunakan Signature Keystore
+router.post("/enroll-device-nobio", authController.enrollDeviceNoBio);
+router.post("/login-device-nobio", authController.loginWithDeviceNoBio);
 
 // Rute pilih cabang (ini pakai preAuthToken di body, jadi tidak butuh header Bearer standar)
 router.post("/select-branch", authController.selectBranch);

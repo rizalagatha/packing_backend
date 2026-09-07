@@ -249,12 +249,10 @@ const enrollDevice = async (req, res) => {
       [device_id, user_kode, userCabang, public_key, device_name],
     );
 
-    res
-      .status(200)
-      .json({
-        success: true,
-        message: "Perangkat berhasil didaftarkan. Menunggu approval.",
-      });
+    res.status(200).json({
+      success: true,
+      message: "Perangkat berhasil didaftarkan. Menunggu approval.",
+    });
   } catch (error) {
     console.error("Enroll Error:", error);
     res
@@ -615,6 +613,205 @@ const logout = async (req, res) => {
   }
 };
 
+const enrollDeviceNoBio = async (req, res) => {
+  try {
+    const { user_kode, user_password, device_id, device_secret, device_name } =
+      req.body;
+
+    const [userRows] = await pool.query(
+      "SELECT user_password, user_cab FROM tuser WHERE user_kode = ?",
+      [user_kode],
+    );
+
+    if (userRows.length === 0)
+      return res
+        .status(404)
+        .json({ success: false, message: "User tidak ditemukan." });
+    if (userRows[0].user_password !== user_password)
+      return res
+        .status(401)
+        .json({ success: false, message: "Password salah." });
+
+    const userCabang = userRows[0].user_cab;
+    const secretHash = await bcrypt.hash(device_secret, 10);
+
+    await pool.query("DELETE FROM tuser_device WHERE device_id = ?", [
+      device_id,
+    ]);
+
+    await pool.query(
+      `INSERT INTO tuser_device (device_id, user_kode, cabang, device_secret_hash, device_name, status, created_at) 
+       VALUES (?, ?, ?, ?, ?, 'PENDING', NOW())`,
+      [device_id, user_kode, userCabang, secretHash, device_name],
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Perangkat berhasil didaftarkan. Menunggu approval.",
+    });
+  } catch (error) {
+    console.error("Enroll NoBio Error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mendaftarkan perangkat." });
+  }
+};
+
+const loginWithDeviceNoBio = async (req, res) => {
+  try {
+    const {
+      user_kode,
+      user_password,
+      device_id,
+      device_secret,
+      latitude,
+      longitude,
+    } = req.body;
+
+    if (!user_kode || !user_password || !device_id || !device_secret) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Data login tidak lengkap." });
+    }
+
+    // 1. Cek status perangkat & cocokkan secret
+    const [deviceRows] = await pool.query(
+      "SELECT device_secret_hash, status FROM tuser_device WHERE device_id = ?",
+      [device_id],
+    );
+
+    if (deviceRows.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: "Perangkat ini belum didaftarkan ke sistem.",
+      });
+    }
+    if (deviceRows[0].status !== "APPROVED") {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Akses perangkat ini masih menunggu persetujuan atau telah dicabut.",
+      });
+    }
+    if (!deviceRows[0].device_secret_hash) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Perangkat ini terdaftar dengan metode biometrik, bukan tanpa biometrik.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(
+      device_secret,
+      deviceRows[0].device_secret_hash,
+    );
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Verifikasi perangkat gagal, perangkat perlu didaftarkan ulang. Silakan tekan MASUK sekali lagi.",
+      });
+    }
+
+    // 2. Verifikasi identitas & password (sama seperti loginWithDevice)
+    const [userRows] = await pool.query(
+      "SELECT * FROM tuser WHERE user_kode = ?",
+      [user_kode],
+    );
+    if (userRows.length === 0) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Kode User tidak ditemukan." });
+    }
+    const firstUser = userRows[0];
+    if (firstUser.user_password !== user_password) {
+      return res.status(401).json({
+        success: false,
+        message: "Password yang Anda masukkan salah.",
+      });
+    }
+
+    // 3. Lanjut geofencing & generate token — identik dengan loginWithDevice
+    if (userRows.length > 1) {
+      const branchCodes = userRows.map((user) => user.user_cab);
+      const [gudangRows] = await pool.query(
+        "SELECT gdg_kode, gdg_nama FROM tgudang WHERE gdg_kode IN (?)",
+        [branchCodes],
+      );
+      const branchMap = new Map(
+        gudangRows.map((g) => [g.gdg_kode, g.gdg_nama]),
+      );
+      const detailedBranches = userRows.map((user) => ({
+        kode: user.user_cab,
+        nama: branchMap.get(user.user_cab) || user.user_cab,
+      }));
+
+      const preAuthPayload = {
+        kode: firstUser.user_kode,
+        nama: firstUser.user_nama,
+      };
+      const preAuthToken = jwt.sign(preAuthPayload, process.env.JWT_SECRET, {
+        expiresIn: "5m",
+      });
+
+      return res.status(200).json({
+        success: true,
+        multiBranch: true,
+        preAuthToken,
+        branches: detailedBranches,
+      });
+    } else {
+      const cabangKode = firstUser.user_cab;
+      const [gudangRows] = await pool.query(
+        "SELECT gdg_nama, gdg_dc, gdg_lat, gdg_long FROM tgudang WHERE gdg_kode = ?",
+        [cabangKode],
+      );
+      const gudang = gudangRows.length > 0 ? gudangRows[0] : null;
+      const cabangNama = gudang ? gudang.gdg_nama : cabangKode;
+
+      if (gudang && gudang.gdg_dc === 0) {
+        if (!latitude || !longitude) {
+          return res.status(403).json({
+            success: false,
+            message: "Akses Ditolak. Harap izinkan GPS.",
+          });
+        }
+        const storeLat = parseFloat(gudang.gdg_lat);
+        const storeLong = parseFloat(gudang.gdg_long);
+        if (isNaN(storeLat) || isNaN(storeLong)) {
+          return res.status(500).json({
+            success: false,
+            message: "Koordinat toko belum disetting.",
+          });
+        }
+        const distance = calculateDistance(
+          latitude,
+          longitude,
+          storeLat,
+          storeLong,
+        );
+        if (distance > 100) {
+          return res.status(403).json({
+            success: false,
+            message: `Akses Ditolak. Jarak Anda: ${Math.round(distance)} meter.`,
+          });
+        }
+      }
+
+      const finalData = generateFinalToken(firstUser, cabangNama);
+      res
+        .status(200)
+        .json({ success: true, multiBranch: false, data: finalData });
+    }
+  } catch (error) {
+    console.error("Login with Device NoBio Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan pada verifikasi keamanan.",
+    });
+  }
+};
+
 module.exports = {
   login,
   selectBranch,
@@ -623,4 +820,6 @@ module.exports = {
   enrollDevice,
   requestChallenge,
   loginWithDevice,
+  enrollDeviceNoBio,
+  loginWithDeviceNoBio,
 };
