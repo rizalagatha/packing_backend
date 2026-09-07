@@ -22,21 +22,22 @@ const downloadMasterBazar = async (req, res) => {
         h.brg_minqty AS promo_qty, 
         h.brg_ket AS keterangan,
         IFNULL(h.brg_ktg, '') AS kategori,
-        IFNULL(h.brg_ktgp, '') AS tipe_produk
+        IFNULL(h.brg_ktgp, '') AS tipe_produk,
+        IFNULL(h.brg_jeniskain, '') AS jenis_kain
       FROM tbarangdc_dtl d
       LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
       ORDER BY d.brgd_barcode ASC;
     `;
 
     const queryCustomer = `
-  SELECT 
-    cus_kode, 
-    cus_nama, 
-    IFNULL(cus_alamat, '') as cus_alamat,
-    cus_cab -- [TAMBAHKAN INI]
-  FROM tcustomer 
-  ORDER BY cus_nama ASC;
-`;
+      SELECT 
+        cus_kode, 
+        cus_nama, 
+        IFNULL(cus_alamat, '') as cus_alamat,
+        cus_cab -- [TAMBAHKAN INI]
+      FROM tcustomer 
+      ORDER BY cus_nama ASC;
+    `;
 
     const queryRekening = `
       SELECT DISTINCT
@@ -273,9 +274,78 @@ const uploadBazarSales = async (req, res) => {
   }
 };
 
+// POST /api/bazar/create-customer
+const createBazarCustomer = async (req, res) => {
+  const { nama, hp, cabang } = req.body;
+  const connection = await pool.getConnection();
+
+  try {
+    if (!nama || !nama.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Nama pelanggan wajib diisi." });
+    }
+    if (!cabang) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Cabang tidak diketahui." });
+    }
+
+    await connection.beginTransaction();
+
+    // Format kode: <CABANG><5 digit running>, contoh B0200001
+    // Kode default "B0200000" (BAZAR UMUM) sengaja di-exclude dari perhitungan running number
+    const prefix = cabang;
+    const defaultKode = `${prefix}00000`;
+
+    const [rows] = await connection.query(
+      `SELECT IFNULL(MAX(CAST(SUBSTRING(cus_kode, LENGTH(?) + 1) AS UNSIGNED)), 0) AS maxNum
+       FROM tcustomer
+       WHERE cus_kode LIKE ? AND cus_kode <> ?
+       FOR UPDATE`,
+      [prefix, `${prefix}%`, defaultKode],
+    );
+
+    const nextNum = Number(rows[0].maxNum || 0) + 1;
+    const newKode = `${prefix}${String(nextNum).padStart(5, "0")}`;
+
+    let cleanHp = (hp || "").toString().replace(/[^0-9]/g, "");
+    if (cleanHp.startsWith("0")) {
+      cleanHp = "62" + cleanHp.slice(1);
+    }
+
+    await connection.query(
+      `INSERT INTO tcustomer (cus_kode, cus_nama, cus_telp, cus_cab, cus_alamat, date_create, user_create)
+       VALUES (?, ?, ?, ?, '', NOW(), ?)`,
+      [newKode, nama.trim(), cleanHp, cabang, req.user?.kode || "BAZAR_APP"],
+    );
+
+    await connection.commit();
+
+    res.status(200).json({
+      success: true,
+      message: "Pelanggan baru berhasil disimpan.",
+      data: {
+        cus_kode: newKode,
+        cus_nama: nama.trim(),
+        cus_alamat: "",
+        cus_telp: cleanHp,
+      },
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error createBazarCustomer:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal menyimpan pelanggan baru." });
+  } finally {
+    connection.release();
+  }
+};
+
 module.exports = {
   downloadMasterBazar,
   uploadKoreksiBazar,
   uploadBazarSales,
-  // Fungsi uploadInvoice dan lainnya akan kita tambahkan di sini nanti
+  createBazarCustomer, // <-- tambahkan
 };

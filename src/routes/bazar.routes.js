@@ -19,5 +19,10 @@ router.post(
   authenticateToken,
   bazarController.uploadBazarSales,
 );
+router.post(
+  "/create-customer",
+  authenticateToken,
+  bazarController.createBazarCustomer,
+);
 
 module.exports = router;
