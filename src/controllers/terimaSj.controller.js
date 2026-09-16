@@ -78,6 +78,7 @@ const loadInitialData = async (req, res) => {
         )               AS nama,
         d.sjd_ukuran    AS ukuran,
         b.brgd_barcode  AS barcode,
+        d.sjd_unit_serial AS unitSerial,
         d.sjd_jumlah    AS jumlahKirim,
         CASE 
           WHEN g.brg_jenis IN ('ACCESORIES','OBAT') THEN d.sjd_jumlah
@@ -149,14 +150,28 @@ const saveData = async (req, res) => {
           item.kode,
           item.ukuran,
           item.jumlahTerima,
+          item.unitSerial || null,
         ];
       });
 
     if (detailValues.length > 0) {
       await connection.query(
-        `INSERT INTO ttrm_sj_dtl (tjd_idrec, tjd_iddrec, tjd_nomor, tjd_kode, tjd_ukuran, tjd_jumlah) VALUES ?;`,
+        `INSERT INTO ttrm_sj_dtl (tjd_idrec, tjd_iddrec, tjd_nomor, tjd_kode, tjd_ukuran, tjd_jumlah, tjd_unit_serial) VALUES ?;`,
         [detailValues],
       );
+
+      // BARU: update status unit yang benar-benar diterima toko
+      const serialsToUpdate = detailValues
+        .map((row) => row[6])
+        .filter((s) => s !== null);
+      if (serialsToUpdate.length > 0) {
+        await connection.query(
+          `UPDATE tbarangdc_unit SET unit_status = 'DI_TOKO', unit_lokasi_saat_ini = ?,
+             date_modified = NOW(), user_modified = ?
+           WHERE unit_serial IN (?)`,
+          [user.cabang, user.kode, serialsToUpdate],
+        );
+      }
     }
 
     await connection.query(

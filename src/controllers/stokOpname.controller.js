@@ -93,9 +93,78 @@ const downloadMasterLokasi = async (req, res) => {
   }
 };
 
+const downloadMasterUnit = async (req, res) => {
+  try {
+    const { cabang } = req.query;
+    if (!cabang) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Parameter cabang harus diisi." });
+    }
+
+    // Unit yang seharusnya ada secara fisik di cabang ini — DI_TOKO
+    // (showroom) dan RESERVED (dipesan, tapi fisiknya tetap di toko)
+    // sama-sama relevan buat opname
+    const query = `
+      SELECT unit_serial, unit_kode, unit_ukuran, unit_status
+      FROM tbarangdc_unit
+      WHERE unit_lokasi_saat_ini = ?
+        AND unit_status IN ('DI_TOKO', 'RESERVED')
+    `;
+    const [rows] = await pool.query(query, [cabang]);
+
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error downloadMasterUnit:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mendownload data unit." });
+  }
+};
+
+const getMissingUnits = async (req, res) => {
+  try {
+    const { cabang } = req.query;
+    if (!cabang) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Parameter cabang harus diisi." });
+    }
+
+    const [activeSoRows] = await pool.query(
+      `SELECT st_tanggal FROM tsop_tanggal WHERE st_cab = ? AND st_transfer = 'N' ORDER BY st_tanggal DESC LIMIT 1`,
+      [cabang],
+    );
+    const activeSoDate =
+      activeSoRows.length > 0
+        ? moment(activeSoRows[0].st_tanggal).format("YYYY-MM-DD")
+        : moment().format("YYYY-MM-DD");
+
+    const query = `
+      SELECT u.unit_serial, u.unit_kode, u.unit_ukuran,
+             TRIM(CONCAT(a.brg_jeniskaos," ",a.brg_tipe," ",a.brg_lengan," ",a.brg_jeniskain," ",a.brg_warna)) AS nama
+      FROM tbarangdc_unit u
+      LEFT JOIN tbarangdc a ON a.brg_kode = u.unit_kode
+      WHERE u.unit_lokasi_saat_ini = ?
+        AND u.unit_status IN ('DI_TOKO', 'RESERVED')
+        AND u.unit_serial NOT IN (
+          SELECT tud_unit_serial FROM topname_unit_dtl
+          WHERE tud_cab = ? AND tud_tanggal_so = ?
+        )
+      ORDER BY u.unit_kode, u.unit_ukuran
+    `;
+    const [rows] = await pool.query(query, [cabang, cabang, activeSoDate]);
+
+    res.json({ success: true, data: rows, periode: activeSoDate });
+  } catch (error) {
+    console.error("Error getMissingUnits:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // --- 2. Upload Hasil (Integrasi ke tabel thitungstok dengan Filter Tanggal SO) ---
 const uploadHasilOpname = async (req, res) => {
-  const { items, targetCabang, deviceInfo, operatorName } = req.body;
+  const { items, unitScans, targetCabang, deviceInfo, operatorName } = req.body;
 
   const totalPcs = items.reduce((sum, i) => sum + Number(i.qty_fisik || 0), 0);
   const user = req.user;
@@ -158,6 +227,33 @@ const uploadHasilOpname = async (req, res) => {
       await connection.query(query, [values, activeSoDate]);
     }
 
+    // BARU: catat scan per-unit (kalau ada) ke tabel terpisah — dipakai
+    // buat laporan "unit hilang", di luar mekanisme agregat lama
+    if (unitScans && unitScans.length > 0) {
+      const unitValues = unitScans.map((u) => [
+        cabangTujuan,
+        u.lokasi || "",
+        u.unit_serial,
+        activeSoDate,
+        deviceInfo || "Unknown",
+        operatorName || "No Name",
+        new Date(),
+        user.kode,
+      ]);
+      await connection.query(
+        `INSERT INTO topname_unit_dtl
+          (tud_cab, tud_lokasi, tud_unit_serial, tud_tanggal_so, tud_device, tud_operator, date_create, user_create)
+         VALUES ?
+         ON DUPLICATE KEY UPDATE
+           tud_lokasi = VALUES(tud_lokasi),
+           tud_device = VALUES(tud_device),
+           tud_operator = VALUES(tud_operator),
+           date_create = VALUES(date_create),
+           user_create = VALUES(user_create)`,
+        [unitValues],
+      );
+    }
+
     await connection.commit();
     res.status(200).json({
       success: true,
@@ -207,6 +303,8 @@ module.exports = {
   getCabangList,
   downloadMasterBarang,
   downloadMasterLokasi,
+  downloadMasterUnit,
+  getMissingUnits,
   uploadHasilOpname,
   checkMismatchLokasi,
 };

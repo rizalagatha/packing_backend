@@ -47,7 +47,7 @@ const saveData = async (req, res) => {
           nomorPermintaan,
           header.keterangan,
           user.kode,
-        ]
+        ],
       );
     } else {
       await connection.query(
@@ -58,7 +58,7 @@ const saveData = async (req, res) => {
           header.keterangan,
           user.kode,
           sjNomor,
-        ]
+        ],
       );
     }
 
@@ -77,7 +77,7 @@ const saveData = async (req, res) => {
     if (detailValues.length > 0) {
       await connection.query(
         `INSERT INTO tdc_sj_dtl (sjd_iddrec, sjd_nomor, sjd_kode, sjd_ukuran, sjd_jumlah) VALUES ?;`,
-        [detailValues]
+        [detailValues],
       );
     }
 
@@ -169,12 +169,12 @@ const searchStores = async (req, res) => {
 
     const [[{ total }]] = await pool.query(
       `SELECT COUNT(*) as total FROM tgudang ${whereClause}`,
-      params
+      params,
     );
 
     const [items] = await pool.query(
       `SELECT gdg_kode AS kode, gdg_nama AS nama FROM tgudang ${whereClause} ORDER BY gdg_kode LIMIT ? OFFSET ?;`,
-      [...params, parseInt(itemsPerPage), parseInt(offset)]
+      [...params, parseInt(itemsPerPage), parseInt(offset)],
     );
 
     res.status(200).json({ success: true, data: { items, total } });
@@ -202,7 +202,7 @@ const searchPermintaan = async (req, res) => {
 
     const [[{ total }]] = await pool.query(
       `SELECT COUNT(*) AS total ${baseFrom} ${searchWhere}`,
-      params
+      params,
     );
 
     const dataQuery = `SELECT h.mt_nomor AS nomor, h.mt_tanggal AS tanggal, h.mt_otomatis AS otomatis, h.mt_ket AS keterangan ${baseFrom} ${searchWhere} ORDER BY h.date_create DESC LIMIT ? OFFSET ?;`;
@@ -230,11 +230,11 @@ const searchTerimaRb = async (req, res) => {
 
     const [[{ total }]] = await pool.query(
       `SELECT COUNT(*) AS total ${baseQuery}`,
-      params
+      params,
     );
     const [items] = await pool.query(
       `SELECT h.rb_nomor AS nomor, h.rb_tanggal AS tanggal, r.rb_nomor AS no_rb, r.rb_tanggal AS tgl_rb, CONCAT(h.rb_cab, ' - ', g.gdg_nama) AS dari_store ${baseQuery} ORDER BY h.date_create DESC LIMIT ? OFFSET ?;`,
-      [...params, parseInt(itemsPerPage), parseInt(offset)]
+      [...params, parseInt(itemsPerPage), parseInt(offset)],
     );
 
     res.status(200).json({ success: true, data: { items, total } });
@@ -247,37 +247,82 @@ const searchTerimaRb = async (req, res) => {
 const getItemsFromPacking = async (req, res) => {
   try {
     const { packNomor } = req.params;
-    const { cabang: gudang } = req.user; // Ambil info gudang dari user KDC yang login
 
-    // Query untuk mengambil semua item dari tpacking_dtl
-    // dan menggabungkannya untuk mendapatkan detail lengkap
+    // Ambil ringkasan qty per kode+ukuran dari kardus ini, plus SPK-nya
+    // (1 pack = 1 SPK, diambil dari staging tdc_stbj yang punya
+    // tsd_packing sama dengan nomor packing ini)
     const query = `
-            SELECT
-                d.packd_barcode AS barcode,
-                b.brgd_kode AS kode,
-                TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
-                d.size AS ukuran,
-                d.packd_qty AS qty,
-                IFNULL((
-                    SELECT SUM(m.mst_stok_in - m.mst_stok_out) FROM tmasterstok m
-                    WHERE m.mst_aktif = 'Y' AND m.mst_cab = ? AND m.mst_brg_kode = b.brgd_kode AND m.mst_ukuran = d.size
-                ), 0) AS stok
-            FROM tpacking_dtl d
-            JOIN tbarangdc_dtl b ON d.packd_barcode = b.brgd_barcode
-            JOIN tbarangdc h ON b.brgd_kode = h.brg_kode
-            WHERE d.packd_pack_nomor = ?;
-        `;
+      SELECT
+        d.packd_barcode AS barcode,
+        b.brgd_kode AS kode,
+        TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
+        d.size AS ukuran,
+        d.packd_qty AS qty,
+        (SELECT s.tsd_spk_nomor FROM tdc_stbj s
+         WHERE s.tsd_packing = d.packd_pack_nomor
+           AND s.tsd_kode = b.brgd_kode AND s.tsd_ukuran = d.size
+         LIMIT 1) AS spk
+      FROM tpacking_dtl d
+      JOIN tbarangdc_dtl b ON d.packd_barcode = b.brgd_barcode
+      JOIN tbarangdc h ON b.brgd_kode = h.brg_kode
+      WHERE d.packd_pack_nomor = ?;
+    `;
+    const [rows] = await pool.query(query, [packNomor]);
 
-    const [items] = await pool.query(query, [gudang, packNomor]);
-
-    if (items.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Nomor Packing tidak ditemukan atau tidak memiliki item.",
       });
     }
 
-    res.status(200).json({ success: true, data: items });
+    // BARU: untuk tiap baris, pilih N unit_serial berstatus DI_DC (FIFO)
+    // yang match kode+ukuran+SPK — assignment tebakan seperti di Terima
+    // STBJ, terverifikasi/terkoreksi lagi kalau nanti ada mismatch di
+    // titik scan berikutnya (self-healing di mode Scan Barang).
+    const resultUnits = [];
+    for (const row of rows) {
+      if (!row.spk) {
+        return res.status(409).json({
+          success: false,
+          message: `Tidak ditemukan SPK untuk ${row.kode} / ${row.ukuran} pada packing ${packNomor}. Cek data Terima STBJ.`,
+        });
+      }
+      const qty = Number(row.qty) || 0;
+      if (qty <= 0) continue;
+
+      const [units] = await pool.query(
+        `SELECT unit_serial FROM tbarangdc_unit
+         WHERE unit_spk_nomor = ? AND unit_kode = ? AND unit_ukuran = ?
+           AND unit_status = 'DI_DC'
+         ORDER BY date_create ASC, unit_serial ASC
+         LIMIT ?`,
+        [row.spk, row.kode, row.ukuran, qty],
+      );
+
+      if (units.length < qty) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `Unit tersedia di DC tidak cukup untuk ${row.nama} (${row.ukuran}): ` +
+            `butuh ${qty}, baru tersedia ${units.length}. Cek Terima STBJ untuk item ini.`,
+        });
+      }
+
+      for (const u of units) {
+        resultUnits.push({
+          unitSerial: u.unit_serial,
+          kode: row.kode,
+          ukuran: row.ukuran,
+          nama: row.nama,
+          barcode: row.barcode,
+          spk: row.spk,
+          keterangan: `From ${packNomor}`,
+        });
+      }
+    }
+
+    res.status(200).json({ success: true, data: resultUnits });
   } catch (error) {
     console.error("Error in getItemsFromPacking:", error);
     res

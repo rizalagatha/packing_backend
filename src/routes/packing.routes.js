@@ -1,24 +1,30 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const packingController = require('../controllers/packing.controller');
-const { authenticateToken } = require('../middlewares/auth.middleware');
+const packingController = require("../controllers/packing.controller");
+const { authenticateToken } = require("../middlewares/auth.middleware");
 
 /**
  * @route   POST /api/packing
  * @desc    Membuat sesi packing baru
  * @access  Private (butuh token)
  */
-router.post('/', authenticateToken, packingController.createPacking);
+router.post("/", authenticateToken, packingController.createPacking);
 
-router.get('/history', authenticateToken, packingController.getPackingHistory);
+router.get("/history", authenticateToken, packingController.getPackingHistory);
 
-router.get('/search', authenticateToken, packingController.searchPacking);
+router.get("/search", authenticateToken, packingController.searchPacking);
 
-router.put('/:nomor', authenticateToken, packingController.updatePacking);
+router.get(
+  "/lookup/unit-for-packing/:barcode",
+  authenticateToken,
+  packingController.findUnitForPacking,
+);
 
-router.delete('/:nomor', authenticateToken, packingController.deletePacking);
+router.put("/:nomor", authenticateToken, packingController.updatePacking);
 
-router.get('/:nomor', authenticateToken, packingController.getPackingDetail);
+router.delete("/:nomor", authenticateToken, packingController.deletePacking);
+
+router.get("/:nomor", authenticateToken, packingController.getPackingDetail);
 
 // Anda bisa menambahkan rute lain terkait packing di sini nanti
 // Contoh: router.get('/', authenticateToken, packingController.getAllPacking);

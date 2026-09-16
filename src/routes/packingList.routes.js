@@ -22,9 +22,11 @@ router.get("/barcode/:barcode", packingListController.findProductByBarcode);
 router.get("/search-permintaan", packingListController.searchPermintaanOpen);
 
 // Ambil Daftar Riwayat Packing List (Filter Tanggal)
-router.get('/history/list', packingListController.getHistory);
+router.get("/history/list", packingListController.getHistory);
 
 // Ambil Detail Item Riwayat (untuk Accordion/Expand)
-router.get('/history/:nomor/detail', packingListController.getHistoryDetail);
+router.get("/history/:nomor/detail", packingListController.getHistoryDetail);
+
+router.get("/unit/:serial", packingListController.findUnitBySerial);
 
 module.exports = router;

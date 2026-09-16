@@ -89,16 +89,16 @@ const savePackingList = async (req, res) => {
       ]);
     }
 
-    // --- HANDLE DETAIL ---
-    // Hapus detail lama (cara paling aman untuk update)
+    // --- HANDLE DETAIL --- (mendukung 2 jenis baris berdampingan:
+    // unit baru [jumlah=1 + unit_serial] & agregat lama [jumlah=N,
+    // unit_serial NULL] — sesuai keputusan §9 Opsi B, barcode lama
+    // tetap jalan sampai stok lama habis)
     await connection.query(
       "DELETE FROM tpacking_list_dtl WHERE pld_nomor = ?",
       [plNomor],
     );
 
-    // Insert detail baru
     if (items.length > 0) {
-      // Filter item valid (jumlah > 0)
       const validItems = items.filter((item) => item.kode && item.jumlah > 0);
 
       if (validItems.length > 0) {
@@ -108,13 +108,26 @@ const savePackingList = async (req, res) => {
           item.ukuran,
           item.jumlah,
           item.keterangan || "",
+          item.unitSerial || null,
         ]);
 
         const insertDtlSql = `
-          INSERT INTO tpacking_list_dtl (pld_nomor, pld_kode, pld_ukuran, pld_jumlah, pld_keterangan) 
+          INSERT INTO tpacking_list_dtl (pld_nomor, pld_kode, pld_ukuran, pld_jumlah, pld_keterangan, pld_unit_serial)
           VALUES ?
         `;
         await connection.query(insertDtlSql, [values]);
+
+        // Update status unit HANYA untuk baris yang memang serialized
+        const serials = validItems
+          .filter((item) => item.unitSerial)
+          .map((item) => item.unitSerial);
+        if (serials.length > 0) {
+          await connection.query(
+            `UPDATE tbarangdc_unit SET unit_status = 'DI_PACKING', date_modified = NOW(), user_modified = ?
+             WHERE unit_serial IN (?)`,
+            [user.kode, serials],
+          );
+        }
       }
     }
 
@@ -317,6 +330,95 @@ const findProductByBarcode = async (req, res) => {
 };
 
 /**
+ * 4. Cari Unit via QR Serial (Scan Manual) — GANTI dari findProductByBarcode
+ * lama (barcode SKU-level). Sekarang scan unit_serial individual.
+ * Self-healing: kalau status masih DICETAK (belum "diklaim" Terima STBJ
+ * karena tebakan FIFO meleset), tetap diterima — lihat PRD §6.1.
+ */
+const findUnitBySerial = async (req, res) => {
+  const { serial } = req.params;
+  const user = req.user;
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [units] = await connection.query(
+      `SELECT unit_serial, unit_kode, unit_ukuran, unit_status, unit_spk_nomor
+       FROM tbarangdc_unit WHERE unit_serial = ? FOR UPDATE`,
+      [serial],
+    );
+    if (units.length === 0) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ message: "QR tidak dikenali / belum pernah dicetak." });
+    }
+    const unit = units[0];
+
+    if (unit.unit_status === "DICETAK") {
+      // self-healing: fisik ada di DC (berhasil discan), tapi belum
+      // "diklaim" Terima STBJ — tukar mundur 1 unit lain yang DI_DC
+      // (kode+ukuran+SPK sama) supaya total qty tetap konsisten
+      const [swap] = await connection.query(
+        `SELECT unit_serial FROM tbarangdc_unit
+         WHERE unit_kode = ? AND unit_ukuran = ? AND unit_spk_nomor = ?
+           AND unit_status = 'DI_DC' AND unit_serial <> ?
+         LIMIT 1 FOR UPDATE`,
+        [unit.unit_kode, unit.unit_ukuran, unit.unit_spk_nomor, serial],
+      );
+      if (swap.length === 0) {
+        await connection.rollback();
+        return res.status(409).json({
+          message:
+            `Unit ini belum diterima resmi via Terima STBJ (status: DICETAK), ` +
+            `dan tidak ada unit pengganti untuk ditukar. Cek data Terima STBJ.`,
+        });
+      }
+      await connection.query(
+        `UPDATE tbarangdc_unit SET unit_status = 'DICETAK' WHERE unit_serial = ?`,
+        [swap[0].unit_serial],
+      );
+      unit.unit_status = "DI_DC"; // dianggap sudah diterima setelah swap
+    } else if (unit.unit_status !== "DI_DC") {
+      await connection.rollback();
+      return res.status(409).json({
+        message:
+          `Unit ini berstatus '${unit.unit_status}', bukan tersedia di DC. ` +
+          `Kemungkinan sudah diproses lebih lanjut atau bukan untuk gudang ini.`,
+      });
+    }
+
+    const [detail] = await connection.query(
+      `SELECT
+         TRIM(CONCAT(h.brg_jeniskaos," ",h.brg_tipe," ",h.brg_lengan," ",h.brg_jeniskain," ",h.brg_warna)) AS nama,
+         d.brgd_barcode AS barcode
+       FROM tbarangdc_dtl d
+       LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
+       WHERE d.brgd_kode = ? AND d.brgd_ukuran = ?`,
+      [unit.unit_kode, unit.unit_ukuran],
+    );
+
+    await connection.commit();
+
+    res.json({
+      unitSerial: unit.unit_serial,
+      kode: unit.unit_kode,
+      ukuran: unit.unit_ukuran,
+      spk: unit.unit_spk_nomor,
+      nama: detail[0]?.nama || "",
+      barcode: detail[0]?.barcode || "",
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error findUnitBySerial:", error);
+    res.status(500).json({ message: error.message });
+  } finally {
+    connection.release();
+  }
+};
+
+/**
  * 5. Lookup Permintaan Open (Search Modal)
  * REVISI: Disamakan logikanya dengan SuratJalanScreen (Cek tdc_sj_hdr)
  */
@@ -480,6 +582,7 @@ module.exports = {
   getPackingListDetail,
   loadItemsFromRequest,
   findProductByBarcode,
+  findUnitBySerial,
   searchPermintaanOpen,
   getHistory,
   getHistoryDetail,

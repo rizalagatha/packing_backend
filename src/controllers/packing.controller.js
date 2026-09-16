@@ -30,6 +30,79 @@ const generatePackingNumber = async (connection) => {
   return `${prefix}${String(nextSequence).padStart(5, "0")}`;
 };
 
+const findUnitForPacking = async (req, res) => {
+  const { barcode } = req.params;
+  const { spkNomor } = req.query;
+
+  try {
+    const [unitRows] = await pool.query(
+      `SELECT unit_serial, unit_kode, unit_ukuran, unit_status, unit_spk_nomor
+       FROM tbarangdc_unit WHERE unit_serial = ?`,
+      [barcode],
+    );
+
+    if (unitRows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "QR tidak dikenali." });
+    }
+
+    const unit = unitRows[0];
+
+    if (unit.unit_status !== "DICETAK") {
+      return res.status(400).json({
+        success: false,
+        message: `Unit ini berstatus '${unit.unit_status}', bukan barang siap packing.`,
+      });
+    }
+
+    if (spkNomor && unit.unit_spk_nomor !== spkNomor) {
+      return res.status(400).json({
+        success: false,
+        message: `Unit ini milik SPK ${unit.unit_spk_nomor}, bukan SPK yang sedang di-packing (${spkNomor}).`,
+      });
+    }
+
+    const [dupRows] = await pool.query(
+      `SELECT packd_pack_nomor FROM tpacking_dtl WHERE packd_unit_serial = ? LIMIT 1`,
+      [unit.unit_serial],
+    );
+    if (dupRows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Unit ini sudah pernah di-packing di dokumen ${dupRows[0].packd_pack_nomor}.`,
+      });
+    }
+
+    const [detailRows] = await pool.query(
+      `SELECT TRIM(CONCAT(a.brg_jeniskaos," ",a.brg_tipe," ",a.brg_lengan," ",a.brg_jeniskain," ",a.brg_warna)) AS nama,
+              b.brgd_barcode AS barcode
+       FROM tbarangdc_dtl b
+       LEFT JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
+       WHERE b.brgd_kode = ? AND b.brgd_ukuran = ?`,
+      [unit.unit_kode, unit.unit_ukuran],
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        unitSerial: unit.unit_serial,
+        kode: unit.unit_kode,
+        ukuran: unit.unit_ukuran,
+        nama: detailRows[0]?.nama || "",
+        barcode: detailRows[0]?.barcode || "",
+        stok: 0,
+        spkNomor: unit.unit_spk_nomor,
+      },
+    });
+  } catch (error) {
+    console.error("Error in findUnitForPacking:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Terjadi kesalahan pada server." });
+  }
+};
+
 /**
  * Logika untuk membuat sesi packing baru
  */
@@ -77,9 +150,10 @@ const createPacking = async (req, res) => {
       item.qty,
       item.brg_kaosan,
       item.size,
+      item.unitSerial || null,
     ]);
     await connection.query(
-      "INSERT INTO tpacking_dtl (packd_pack_nomor, packd_barcode, packd_qty, packd_brg_kaosan, size) VALUES ?",
+      "INSERT INTO tpacking_dtl (packd_pack_nomor, packd_barcode, packd_qty, packd_brg_kaosan, size, packd_unit_serial) VALUES ?",
       [packingDetails],
     );
 
@@ -334,16 +408,16 @@ const updatePacking = async (req, res) => {
 
     // 2. Masukkan kembali item yang sudah dikoreksi
     const itemInsertQuery = `
-            INSERT INTO tpacking_dtl (packd_pack_nomor, packd_barcode, packd_qty, brg_kaosan, size) 
+            INSERT INTO tpacking_dtl (packd_pack_nomor, packd_barcode, packd_qty, brg_kaosan, size, packd_unit_serial) 
             VALUES ?;
         `;
-    // Asumsi 'items' adalah array objek lengkap dari frontend
     const itemValues = items.map((item) => [
       nomor,
-      item.packd_barcode || item.barcode, // Sesuaikan nama field
+      item.packd_barcode || item.barcode,
       item.packd_qty || item.qty,
       item.brg_kaosan || item.nama,
       item.packd_size || item.ukuran,
+      item.packd_unit_serial || item.unitSerial || null,
     ]);
 
     await connection.query(itemInsertQuery, [itemValues]);
@@ -371,6 +445,7 @@ const updatePacking = async (req, res) => {
 };
 
 module.exports = {
+  findUnitForPacking,
   createPacking,
   getPackingHistory,
   getPackingDetail,

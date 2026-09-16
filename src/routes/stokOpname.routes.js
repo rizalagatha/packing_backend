@@ -7,6 +7,8 @@ router.use(authenticateToken);
 router.get("/cabang", soController.getCabangList);
 router.get("/download", soController.downloadMasterBarang);
 router.get("/download-lokasi", soController.downloadMasterLokasi);
+router.get("/download-unit", soController.downloadMasterUnit);
+router.get("/missing-units", soController.getMissingUnits);
 router.post("/upload", soController.uploadHasilOpname);
 router.get("/compare-lokasi", soController.checkMismatchLokasi);
 
