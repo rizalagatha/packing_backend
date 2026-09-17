@@ -276,38 +276,32 @@ const getItemsFromPacking = async (req, res) => {
       });
     }
 
-    // BARU: untuk tiap baris, pilih N unit_serial berstatus DI_DC (FIFO)
-    // yang match kode+ukuran+SPK — assignment tebakan seperti di Terima
-    // STBJ, terverifikasi/terkoreksi lagi kalau nanti ada mismatch di
-    // titik scan berikutnya (self-healing di mode Scan Barang).
+    // Untuk tiap baris, coba pilih N unit_serial berstatus DI_DC (FIFO)
+    // yang match kode+ukuran+SPK. Kalau SPK tidak ketemu, atau unit yang
+    // tersedia kurang dari qty kardus — SISANYA DILOLOSKAN sebagai baris
+    // agregat legacy (unitSerial=null), bukan ditolak. Barang yang belum
+    // pernah ikut siklus produksi versi baru (belum ada baris di
+    // tbarangdc_unit sama sekali) akan selalu masuk jalur ini sepenuhnya.
+    // Sesuai §9 Opsi B: barcode lama tetap jalan penuh selama masa transisi.
     const resultUnits = [];
     for (const row of rows) {
-      if (!row.spk) {
-        return res.status(409).json({
-          success: false,
-          message: `Tidak ditemukan SPK untuk ${row.kode} / ${row.ukuran} pada packing ${packNomor}. Cek data Terima STBJ.`,
-        });
-      }
       const qty = Number(row.qty) || 0;
       if (qty <= 0) continue;
 
-      const [units] = await pool.query(
-        `SELECT unit_serial FROM tbarangdc_unit
-         WHERE unit_spk_nomor = ? AND unit_kode = ? AND unit_ukuran = ?
-           AND unit_status = 'DI_DC'
-         ORDER BY date_create ASC, unit_serial ASC
-         LIMIT ?`,
-        [row.spk, row.kode, row.ukuran, qty],
-      );
-
-      if (units.length < qty) {
-        return res.status(409).json({
-          success: false,
-          message:
-            `Unit tersedia di DC tidak cukup untuk ${row.nama} (${row.ukuran}): ` +
-            `butuh ${qty}, baru tersedia ${units.length}. Cek Terima STBJ untuk item ini.`,
-        });
+      let units = [];
+      if (row.spk) {
+        const [found] = await pool.query(
+          `SELECT unit_serial FROM tbarangdc_unit
+           WHERE unit_spk_nomor = ? AND unit_kode = ? AND unit_ukuran = ?
+             AND unit_status = 'DI_DC'
+           ORDER BY date_create ASC, unit_serial ASC
+           LIMIT ?`,
+          [row.spk, row.kode, row.ukuran, qty],
+        );
+        units = found;
       }
+      // else: SPK tidak ditemukan (barang lama) — units tetap [], semua
+      // qty jatuh ke baris legacy di bawah.
 
       for (const u of units) {
         resultUnits.push({
@@ -317,7 +311,22 @@ const getItemsFromPacking = async (req, res) => {
           nama: row.nama,
           barcode: row.barcode,
           spk: row.spk,
+          jumlah: 1,
           keterangan: `From ${packNomor}`,
+        });
+      }
+
+      const sisa = qty - units.length;
+      if (sisa > 0) {
+        resultUnits.push({
+          unitSerial: null,
+          kode: row.kode,
+          ukuran: row.ukuran,
+          nama: row.nama,
+          barcode: row.barcode,
+          spk: row.spk || null,
+          jumlah: sisa,
+          keterangan: `From ${packNomor} (legacy)`,
         });
       }
     }
