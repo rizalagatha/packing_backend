@@ -23,7 +23,6 @@ const downloadMasterBazar = async (req, res) => {
         h.brg_ket AS keterangan,
         IFNULL(h.brg_ktg, '') AS kategori,
         IFNULL(h.brg_ktgp, '') AS tipe_produk,
-        IFNULL(h.brg_jeniskain, '') AS jenis_kain,
         COALESCE(
           (SELECT img_url FROM tbarangdc_images WHERE img_brg_kode = h.brg_kode ORDER BY img_index ASC LIMIT 1),
           h.brg_gambar_url
