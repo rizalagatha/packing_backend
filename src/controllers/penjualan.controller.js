@@ -818,11 +818,11 @@ const searchProdukPenjualan = async (req, res) => {
         ) AS gambar_url`;
 
     const orderGambarExpr = isKiddify
-      ? `0` // semua KF1 dianggap "punya gambar" (path selalu ada), tidak perlu diurutkan berdasarkan null
+      ? `(1=0)` // ekspresi boolean konstan, selalu FALSE — aman dipakai di ORDER BY tanpa dianggap posisi kolom
       : `(COALESCE(
-          (SELECT img_url FROM tbarangdc_images WHERE img_brg_kode = h.brg_kode ORDER BY img_index ASC LIMIT 1),
-          h.brg_gambar_url
-        ) IS NULL)`;
+            (SELECT img_url FROM tbarangdc_images WHERE img_brg_kode = h.brg_kode ORDER BY img_index ASC LIMIT 1),
+            h.brg_gambar_url
+          ) IS NULL)`;
 
     const query = `
       SELECT 
