@@ -791,6 +791,84 @@ const sendReceiptWaImage = async (req, res) => {
   });
 };
 
+const searchProdukPenjualan = async (req, res) => {
+  try {
+    const {
+      q = "",
+      cabang: cabangOverride,
+      offset = 0,
+      limit = 60,
+    } = req.query;
+    const userCabang = req.user.cabang;
+    const targetCabang = cabangOverride || userCabang;
+    const searchTerm = `%${q}%`;
+
+    const isKiddify = targetCabang === "KF1";
+
+    // Filter kategori khusus KF1 — hanya tampilkan brg_ktg = 'KIDDIFY'
+    const kategoriFilter = isKiddify ? "AND h.brg_ktg = 'KIDDIFY'" : "";
+
+    // Sumber gambar beda untuk KF1: path tetap /images/cabang/KDC/{kode}.jpg,
+    // bukan dari tbarangdc_images/brg_gambar_url seperti cabang lain
+    const gambarSelect = isKiddify
+      ? `CONCAT('/images/cabang/KDC/', h.brg_kode, '.jpg') AS gambar_url`
+      : `COALESCE(
+          (SELECT img_url FROM tbarangdc_images WHERE img_brg_kode = h.brg_kode ORDER BY img_index ASC LIMIT 1),
+          h.brg_gambar_url
+        ) AS gambar_url`;
+
+    const orderGambarExpr = isKiddify
+      ? `0` // semua KF1 dianggap "punya gambar" (path selalu ada), tidak perlu diurutkan berdasarkan null
+      : `(COALESCE(
+          (SELECT img_url FROM tbarangdc_images WHERE img_brg_kode = h.brg_kode ORDER BY img_index ASC LIMIT 1),
+          h.brg_gambar_url
+        ) IS NULL)`;
+
+    const query = `
+      SELECT 
+        d.brgd_barcode AS barcode,
+        d.brgd_kode AS kode,
+        TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
+        d.brgd_ukuran AS ukuran,
+        d.brgd_harga AS harga,
+        h.brg_ktgp AS kategori,
+        ${gambarSelect},
+        IFNULL((
+          SELECT SUM(m.mst_stok_in - m.mst_stok_out)
+          FROM tmasterstok m
+          WHERE m.mst_aktif='Y' AND m.mst_cab=? AND m.mst_brg_kode=d.brgd_kode AND m.mst_ukuran=d.brgd_ukuran
+        ), 0) AS stok
+      FROM tbarangdc_dtl d
+      LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
+      WHERE h.brg_aktif = 0 AND h.brg_logstok <> 'N'
+        ${kategoriFilter}
+        AND (
+          d.brgd_barcode LIKE ? 
+          OR d.brgd_kode LIKE ? 
+          OR TRIM(CONCAT(h.brg_jeniskaos," ",h.brg_tipe," ",h.brg_lengan," ",h.brg_jeniskain," ",h.brg_warna)) LIKE ?
+        )
+      ORDER BY 
+        ${orderGambarExpr} ASC,
+        d.brgd_kode ASC
+      LIMIT ? OFFSET ?
+    `;
+
+    const [rows] = await pool.query(query, [
+      targetCabang,
+      searchTerm,
+      searchTerm,
+      searchTerm,
+      Number(limit),
+      Number(offset),
+    ]);
+
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error searchProdukPenjualan:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   findProductByBarcode,
   getDefaultCustomer,
@@ -801,4 +879,5 @@ module.exports = {
   getPrintData,
   sendReceiptWa,
   sendReceiptWaImage,
+  searchProdukPenjualan, // <-- tambahkan
 };

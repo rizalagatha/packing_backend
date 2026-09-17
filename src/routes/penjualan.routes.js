@@ -8,6 +8,11 @@ router.get("/rekening", penjualanController.searchRekening);
 router.get("/promos", penjualanController.getActivePromos);
 router.get("/promo-items/:nomor", penjualanController.getPromoItems);
 router.get("/default-customer", penjualanController.getDefaultCustomer);
+router.get(
+  "/search-produk",
+  authenticateToken,
+  penjualanController.searchProdukPenjualan,
+);
 router.get("/scan/:barcode", penjualanController.findProductByBarcode);
 router.post("/save", penjualanController.savePenjualan);
 
