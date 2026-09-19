@@ -115,6 +115,9 @@ app.use("/api/minta-bahan", mintaBahanRoutes);
 const mintaBahanFormRoutes = require("./src/routes/mintaBahanForm.routes.js");
 app.use("/api/minta-bahan-form", mintaBahanFormRoutes);
 
+const bukuTamuRoutes = require("./src/routes/bukuTamu.routes.js");
+app.use("/api/buku-tamu", bukuTamuRoutes);
+
 // 7. Menjalankan Server
 const PORT = process.env.PORT || 3002;
 app.use((err, req, res, next) => {
