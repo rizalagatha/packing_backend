@@ -29,30 +29,131 @@ const getRealTimeStock = async (req, res) => {
 
     // 2. Query Ukuran secara Dinamis (Master ukuran agar kolom lengkap seperti di web)
     const [sizes] = await connection.query(
-      `SELECT DISTINCT brgd_ukuran AS mst_ukuran FROM tbarangdc_dtl ORDER BY brgd_ukuran`
+      `SELECT DISTINCT brgd_ukuran AS mst_ukuran FROM tbarangdc_dtl ORDER BY brgd_ukuran`,
     );
 
     let dynamicColumns = "";
     if (sizes.length > 0) {
       dynamicColumns = sizes
-        .map(
-          (s) =>
-            `SUM(CASE WHEN s.mst_ukuran = '${s.mst_ukuran}' THEN s.stok ELSE 0 END) AS '${s.mst_ukuran}'`
-        )
+        .map((s) => {
+          // Escape kutip agar tidak merusak/rawan injeksi lewat label ukuran
+          const sizeLabel = s.mst_ukuran.replace(/'/g, "''");
+          return `SUM(CASE WHEN s.mst_ukuran = '${sizeLabel}' THEN s.stok ELSE 0 END) AS '${sizeLabel}'`;
+        })
         .join(", ");
       dynamicColumns = ", " + dynamicColumns;
     }
 
-    // 3. Siapkan Parameter Dasar
-    let params = [tanggal];
-    let gudangFilter = "1 = 1";
-    if (gudang && gudang !== "ALL") {
-      gudangFilter = `m.mst_cab = ?`;
-      params.push(gudang);
+    // 3. Mode "toko spesifik" — Pesanan Booked/Ready cuma bermakna untuk 1
+    // cabang toko tertentu (SO & reservasi stok toko), bukan agregat ALL
+    // ataupun konteks DC (KDC). Reuse logic penentuan "SO masih OPEN" yang
+    // sama seperti di laporan web (dashboardService.getRealStockList).
+    const isStoreMode = !!gudang && gudang !== "ALL" && gudang !== "KDC";
+
+    let pesananCTESql = "";
+    let pesananSelectSql = ", 0 AS pesananBooked, 0 AS pesananReady";
+    let pesananJoinSql = "";
+    const pesananParamsPre = [];
+    const pesananParamsSelect = [];
+
+    if (isStoreMode) {
+      pesananCTESql = `
+        WITH open_so AS (
+          SELECT Nomor
+          FROM (
+            SELECT
+              y.Nomor,
+              CASE
+                WHEN y.sts <> 0 THEN 'DICLOSE'
+                WHEN y.StatusKirim = 'TERKIRIM' THEN 'CLOSE'
+                WHEN y.StatusKirim = 'BELUM' AND y.keluar = 0 AND y.minta = '' AND y.pesan = 0 THEN 'OPEN'
+                ELSE 'PROSES'
+              END AS StatusFinal
+            FROM (
+              SELECT
+                x.*,
+                IF(x.QtyInv = 0, 'BELUM', IF(x.QtyInv >= x.QtySO, 'TERKIRIM', 'SEBAGIAN')) AS StatusKirim,
+                IFNULL((
+                  SELECT SUM(m.mst_stok_out)
+                  FROM tmasterstok m
+                  WHERE m.mst_noreferensi IN (
+                    SELECT o.mo_nomor FROM tmutasiout_hdr o WHERE o.mo_so_nomor = x.Nomor
+                  )
+                ), 0) AS keluar,
+                IFNULL((
+                  SELECT mt_nomor FROM tmintabarang_hdr WHERE mt_so = x.Nomor LIMIT 1
+                ), '') AS minta,
+                IFNULL((
+                  SELECT SUM(mst_stok_in - mst_stok_out)
+                  FROM tmasterstokso
+                  WHERE mst_aktif = 'Y' AND mst_nomor_so = x.Nomor
+                ), 0) AS pesan
+              FROM (
+                SELECT
+                  h.so_nomor AS Nomor,
+                  h.so_close AS sts,
+                  IFNULL((SELECT SUM(dd.sod_jumlah) FROM tso_dtl dd WHERE dd.sod_so_nomor = h.so_nomor), 0) AS QtySO,
+                  IFNULL((
+                    SELECT SUM(dd.invd_jumlah)
+                    FROM tinv_hdr hh
+                    JOIN tinv_dtl dd ON dd.invd_inv_nomor = hh.inv_nomor
+                    WHERE hh.inv_sts_pro = 0 AND hh.inv_nomor_so = h.so_nomor
+                  ), 0) AS QtyInv
+                FROM tso_hdr h
+                WHERE h.so_close = 0 AND h.so_aktif = 'Y' AND h.so_cab = ?
+              ) x
+            ) y
+          ) z
+          WHERE z.StatusFinal = 'OPEN'
+        ),
+        pesanan_booked_summary AS (
+          SELECT d.sod_kode AS kode, SUM(d.sod_jumlah - IFNULL(d.sod_scanned, 0)) AS booked
+          FROM open_so os
+          JOIN tso_dtl d ON d.sod_so_nomor = os.Nomor
+          WHERE d.sod_jumlah > IFNULL(d.sod_scanned, 0)
+          GROUP BY d.sod_kode
+        )
+      `;
+      pesananParamsPre.push(gudang);
+
+      pesananSelectSql = `
+        , IFNULL(pb.booked, 0) AS pesananBooked
+        , IFNULL((
+            SELECT SUM(mso.mst_stok_in - mso.mst_stok_out)
+            FROM tmasterstokso mso
+            WHERE mso.mst_brg_kode = a.brg_kode AND mso.mst_cab = ? AND mso.mst_aktif = 'Y'
+          ), 0) AS pesananReady
+      `;
+      pesananParamsSelect.push(gudang);
+
+      pesananJoinSql = `LEFT JOIN pesanan_booked_summary pb ON pb.kode = a.brg_kode`;
     }
 
-    // 4. LOGIKA PENCARIAN PINTAR (Multi-Word Search)
+    // 4. Buffer — ambil dari tbarangdc_dtl2 (per cabang), KECUALI cabang KDC
+    // yang memang punya kolom buffer sendiri (brgd_mindc) di tbarangdc_dtl.
+    let bufferSubquery = "";
+    const bufferParams = [];
+    if (gudang === "KDC") {
+      bufferSubquery = `IFNULL((SELECT SUM(brgd_mindc) FROM tbarangdc_dtl b WHERE b.brgd_kode = a.brg_kode), 0)`;
+    } else if (isStoreMode) {
+      bufferSubquery = `IFNULL((SELECT SUM(brgd_min) FROM tbarangdc_dtl2 b2 WHERE b2.brgd_kode = a.brg_kode AND b2.brgd_cab = ?), 0)`;
+      bufferParams.push(gudang);
+    } else {
+      // ALL / gudang kosong: total buffer gabungan semua cabang
+      bufferSubquery = `IFNULL((SELECT SUM(brgd_min) FROM tbarangdc_dtl2 b2 WHERE b2.brgd_kode = a.brg_kode), 0)`;
+    }
+
+    // 5. Siapkan Parameter Dasar (filter stok per gudang)
+    let gudangFilter = "1 = 1";
+    const gudangFilterParams = [];
+    if (gudang && gudang !== "ALL") {
+      gudangFilter = `m.mst_cab = ?`;
+      gudangFilterParams.push(gudang);
+    }
+
+    // 6. LOGIKA PENCARIAN PINTAR (Multi-Word Search)
     let searchFilter = "";
+    const searchParams = [];
     if (search) {
       // Pecah string pencarian berdasarkan spasi (misal: "ko polos pendek" -> ["ko", "polos", "pendek"])
       const words = search.trim().split(/\s+/);
@@ -74,18 +175,31 @@ const getRealTimeStock = async (req, res) => {
       // Masukkan setiap kata ke dalam array parameter (sesuai jumlah placeholder ?)
       words.forEach((word) => {
         const p = `%${word}%`;
-        params.push(p, p, p, p, p, p); // 6 kolom per kata
+        searchParams.push(p, p, p, p, p, p); // 6 kolom per kata
       });
     }
 
-    // 5. Query Utama
+    // 7. Susun Array Parameter sesuai URUTAN kemunculan '?' di teks SQL:
+    //    CTE Pesanan -> Buffer (SELECT) -> pesananReady (SELECT) -> tanggal/gudang (JOIN) -> search (WHERE)
+    const params = [
+      ...pesananParamsPre,
+      ...bufferParams,
+      ...pesananParamsSelect,
+      tanggal,
+      ...gudangFilterParams,
+      ...searchParams,
+    ];
+
+    // 8. Query Utama
     const query = `
+        ${pesananCTESql}
         SELECT
             a.brg_kode AS kode,
             TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna)) AS nama
             ${dynamicColumns}
             , SUM(IFNULL(s.stok, 0)) AS total_stok
-            , IFNULL((SELECT SUM(brgd_min) FROM tbarangdc_dtl b WHERE b.brgd_kode = a.brg_kode), 0) AS Buffer
+            , ${bufferSubquery} AS Buffer
+            ${pesananSelectSql}
         FROM tbarangdc a
         LEFT JOIN (
             SELECT 
@@ -96,6 +210,7 @@ const getRealTimeStock = async (req, res) => {
             WHERE m.mst_aktif = 'Y' AND m.mst_tanggal <= ? AND ${gudangFilter}
             GROUP BY m.mst_brg_kode, m.mst_ukuran
         ) s ON a.brg_kode = s.mst_brg_kode
+        ${pesananJoinSql}
         WHERE a.brg_aktif = 0 AND a.brg_logstok = 'Y' ${searchFilter}
         GROUP BY a.brg_kode, nama
         ${!isShowZero ? "HAVING total_stok > 0" : ""}
@@ -125,12 +240,10 @@ const getLowStock = async (req, res) => {
     const { cabang, kategori, limit = 20 } = req.query;
 
     if (!cabang || cabang === "ALL") {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Silakan pilih cabang/toko terlebih dahulu.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Silakan pilih cabang/toko terlebih dahulu.",
+      });
     }
 
     let categoryFilter =
