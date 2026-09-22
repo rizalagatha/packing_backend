@@ -2,6 +2,105 @@ const pool = require("../config/database");
 const { format } = require("date-fns");
 
 /**
+ * Melengkapi setiap row hasil getRealTimeStock dengan breakdown
+ * Pesanan Booked (SO masih OPEN, belum ke-scan) dan Pesanan Ready
+ * (stok toko yang sudah direservasi untuk SO), masing-masing per ukuran.
+ * Mutasi langsung ke `rows` — dipanggil hanya saat mode toko spesifik.
+ */
+const attachPesananDetail = async (connection, rows, gudang) => {
+  const bookedQuery = `
+    WITH open_so AS (
+      SELECT Nomor
+      FROM (
+        SELECT
+          y.Nomor,
+          CASE
+            WHEN y.sts <> 0 THEN 'DICLOSE'
+            WHEN y.StatusKirim = 'TERKIRIM' THEN 'CLOSE'
+            WHEN y.StatusKirim = 'BELUM' AND y.keluar = 0 AND y.minta = '' AND y.pesan = 0 THEN 'OPEN'
+            ELSE 'PROSES'
+          END AS StatusFinal
+        FROM (
+          SELECT
+            x.*,
+            IF(x.QtyInv = 0, 'BELUM', IF(x.QtyInv >= x.QtySO, 'TERKIRIM', 'SEBAGIAN')) AS StatusKirim,
+            IFNULL((
+              SELECT SUM(m.mst_stok_out)
+              FROM tmasterstok m
+              WHERE m.mst_noreferensi IN (
+                SELECT o.mo_nomor FROM tmutasiout_hdr o WHERE o.mo_so_nomor = x.Nomor
+              )
+            ), 0) AS keluar,
+            IFNULL((
+              SELECT mt_nomor FROM tmintabarang_hdr WHERE mt_so = x.Nomor LIMIT 1
+            ), '') AS minta,
+            IFNULL((
+              SELECT SUM(mst_stok_in - mst_stok_out)
+              FROM tmasterstokso
+              WHERE mst_aktif = 'Y' AND mst_nomor_so = x.Nomor
+            ), 0) AS pesan
+          FROM (
+            SELECT
+              h.so_nomor AS Nomor,
+              h.so_close AS sts,
+              IFNULL((SELECT SUM(dd.sod_jumlah) FROM tso_dtl dd WHERE dd.sod_so_nomor = h.so_nomor), 0) AS QtySO,
+              IFNULL((
+                SELECT SUM(dd.invd_jumlah)
+                FROM tinv_hdr hh
+                JOIN tinv_dtl dd ON dd.invd_inv_nomor = hh.inv_nomor
+                WHERE hh.inv_sts_pro = 0 AND hh.inv_nomor_so = h.so_nomor
+              ), 0) AS QtyInv
+            FROM tso_hdr h
+            WHERE h.so_close = 0 AND h.so_aktif = 'Y' AND h.so_cab = ?
+          ) x
+        ) y
+      ) z
+      WHERE z.StatusFinal = 'OPEN'
+    )
+    SELECT d.sod_kode AS kode, d.sod_ukuran AS ukuran,
+           SUM(d.sod_jumlah - IFNULL(d.sod_scanned, 0)) AS qty
+    FROM open_so os
+    JOIN tso_dtl d ON d.sod_so_nomor = os.Nomor
+    WHERE d.sod_jumlah > IFNULL(d.sod_scanned, 0)
+    GROUP BY d.sod_kode, d.sod_ukuran
+    HAVING qty <> 0;
+  `;
+
+  const readyQuery = `
+    SELECT mso.mst_brg_kode AS kode, mso.mst_ukuran AS ukuran,
+           SUM(mso.mst_stok_in - mso.mst_stok_out) AS qty
+    FROM tmasterstokso mso
+    WHERE mso.mst_cab = ? AND mso.mst_aktif = 'Y'
+    GROUP BY mso.mst_brg_kode, mso.mst_ukuran
+    HAVING qty <> 0;
+  `;
+
+  const [bookedRows] = await connection.query(bookedQuery, [gudang]);
+  const [readyRows] = await connection.query(readyQuery, [gudang]);
+
+  const toMap = (list) => {
+    const map = {};
+    list.forEach((r) => {
+      if (!map[r.kode]) map[r.kode] = {};
+      map[r.kode][r.ukuran] = Number(r.qty);
+    });
+    return map;
+  };
+
+  const bookedMap = toMap(bookedRows);
+  const readyMap = toMap(readyRows);
+
+  rows.forEach((row) => {
+    const bookedDetail = bookedMap[row.kode] || {};
+    const readyDetail = readyMap[row.kode] || {};
+    row.pesananBookedDetail = bookedDetail;
+    row.pesananReadyDetail = readyDetail;
+    row.pesananBooked = Object.values(bookedDetail).reduce((a, b) => a + b, 0);
+    row.pesananReady = Object.values(readyDetail).reduce((a, b) => a + b, 0);
+  });
+};
+
+/**
  * Mendapatkan Stok Real Time (Semua barang)
  * Dioptimalkan untuk Mobile dengan filter pencarian
  */
@@ -45,9 +144,7 @@ const getRealTimeStock = async (req, res) => {
     }
 
     // 3. Mode "toko spesifik" — Pesanan Booked/Ready cuma bermakna untuk 1
-    // cabang toko tertentu (SO & reservasi stok toko), bukan agregat ALL
-    // ataupun konteks DC (KDC). Reuse logic penentuan "SO masih OPEN" yang
-    // sama seperti di laporan web (dashboardService.getRealStockList).
+    // cabang toko tertentu, dihitung terpisah lewat attachPesananDetail() di bawah.
     const isStoreMode = !!gudang && gudang !== "ALL" && gudang !== "KDC";
 
     let pesananCTESql = "";
@@ -182,9 +279,7 @@ const getRealTimeStock = async (req, res) => {
     // 7. Susun Array Parameter sesuai URUTAN kemunculan '?' di teks SQL:
     //    CTE Pesanan -> Buffer (SELECT) -> pesananReady (SELECT) -> tanggal/gudang (JOIN) -> search (WHERE)
     const params = [
-      ...pesananParamsPre,
       ...bufferParams,
-      ...pesananParamsSelect,
       tanggal,
       ...gudangFilterParams,
       ...searchParams,
@@ -192,33 +287,40 @@ const getRealTimeStock = async (req, res) => {
 
     // 8. Query Utama
     const query = `
-        ${pesananCTESql}
-        SELECT
-            a.brg_kode AS kode,
-            TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna)) AS nama
-            ${dynamicColumns}
-            , SUM(IFNULL(s.stok, 0)) AS total_stok
-            , ${bufferSubquery} AS Buffer
-            ${pesananSelectSql}
-        FROM tbarangdc a
-        LEFT JOIN (
-            SELECT 
-                m.mst_brg_kode, 
-                m.mst_ukuran, 
-                SUM(m.mst_stok_in - m.mst_stok_out) as stok
-            FROM ${stockSourceTable} m
-            WHERE m.mst_aktif = 'Y' AND m.mst_tanggal <= ? AND ${gudangFilter}
-            GROUP BY m.mst_brg_kode, m.mst_ukuran
-        ) s ON a.brg_kode = s.mst_brg_kode
-        ${pesananJoinSql}
-        WHERE a.brg_aktif = 0 AND a.brg_logstok = 'Y' ${searchFilter}
-        GROUP BY a.brg_kode, nama
-        ${!isShowZero ? "HAVING total_stok > 0" : ""}
-        ORDER BY nama ASC
-        LIMIT 500;
-    `;
+    SELECT
+        a.brg_kode AS kode,
+        TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna)) AS nama
+        ${dynamicColumns}
+        , SUM(IFNULL(s.stok, 0)) AS total_stok
+        , ${bufferSubquery} AS Buffer
+    FROM tbarangdc a
+    LEFT JOIN (
+        SELECT m.mst_brg_kode, m.mst_ukuran, SUM(m.mst_stok_in - m.mst_stok_out) as stok
+        FROM ${stockSourceTable} m
+        WHERE m.mst_aktif = 'Y' AND m.mst_tanggal <= ? AND ${gudangFilter}
+        GROUP BY m.mst_brg_kode, m.mst_ukuran
+    ) s ON a.brg_kode = s.mst_brg_kode
+    WHERE a.brg_aktif = 0 AND a.brg_logstok = 'Y' ${searchFilter}
+    GROUP BY a.brg_kode, nama
+    ${!isShowZero ? "HAVING total_stok > 0" : ""}
+    ORDER BY nama ASC
+    LIMIT 500;
+`;
 
     const [rows] = await connection.query(query, params);
+
+    // 9. Lengkapi breakdown Pesanan Booked & Ready per ukuran (hanya mode toko spesifik)
+    if (isStoreMode) {
+      await attachPesananDetail(connection, rows, gudang);
+    } else {
+      rows.forEach((row) => {
+        row.pesananBooked = 0;
+        row.pesananReady = 0;
+        row.pesananBookedDetail = {};
+        row.pesananReadyDetail = {};
+      });
+    }
+
     res.json({
       success: true,
       data: rows,
