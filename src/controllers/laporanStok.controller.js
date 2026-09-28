@@ -105,7 +105,8 @@ const attachPesananDetail = async (connection, rows, gudang) => {
  * Dioptimalkan untuk Mobile dengan filter pencarian
  */
 const getRealTimeStock = async (req, res) => {
-  const { gudang, search, jenisStok, tampilkanKosong, tanggal } = req.query;
+  const { gudang, search, jenisStok, tampilkanKosong, tanggal, jenisKain } =
+    req.query;
   const connection = await pool.getConnection();
 
   try {
@@ -276,13 +277,22 @@ const getRealTimeStock = async (req, res) => {
       });
     }
 
+    // 6b. Filter jenis kain (opsional)
+    let jenisKainFilter = "";
+    const jenisKainParams = [];
+    if (jenisKain && jenisKain !== "SEMUA") {
+      jenisKainFilter = "AND a.brg_jeniskain = ?";
+      jenisKainParams.push(jenisKain);
+    }
+
     // 7. Susun Array Parameter sesuai URUTAN kemunculan '?' di teks SQL:
-    //    CTE Pesanan -> Buffer (SELECT) -> pesananReady (SELECT) -> tanggal/gudang (JOIN) -> search (WHERE)
+    //    Buffer (SELECT) -> tanggal/gudang (JOIN) -> search & jenis kain (WHERE)
     const params = [
       ...bufferParams,
       tanggal,
       ...gudangFilterParams,
       ...searchParams,
+      ...jenisKainParams,
     ];
 
     // 8. Query Utama
@@ -304,7 +314,7 @@ const getRealTimeStock = async (req, res) => {
         WHERE m.mst_aktif = 'Y' AND m.mst_tanggal <= ? AND ${gudangFilter}
         GROUP BY m.mst_brg_kode, m.mst_ukuran
     ) s ON a.brg_kode = s.mst_brg_kode
-    WHERE a.brg_aktif = 0 AND a.brg_logstok = 'Y' ${searchFilter}
+    WHERE a.brg_aktif = 0 AND a.brg_logstok = 'Y' ${searchFilter} ${jenisKainFilter}
     GROUP BY a.brg_kode, nama
     ${!isShowZero ? "HAVING total_stok > 0" : ""}
     ORDER BY nama ASC
