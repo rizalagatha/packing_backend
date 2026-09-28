@@ -542,6 +542,9 @@ const checkoutBazar = async (req, res) => {
       .replace(/[^0-9]/g, "")
       .slice(0, 15);
 
+    const namaBank = String(header.so_bank_name || "").slice(0, 30);
+    const noCard = String(header.so_bank_card || "").slice(0, 20);
+
     await connection.query(
       `INSERT INTO tinv_hdr_tmp (
         inv_id, inv_nomor, inv_tanggal, inv_cus_kode,
@@ -557,8 +560,8 @@ const checkoutBazar = async (req, res) => {
         cash,
         voucher,
         card,
-        header.so_bank_card || "",
-        header.so_bank_name || "",
+        noCard,
+        namaBank,
         invJeniscard,
         invNosetor,
         kasir,
