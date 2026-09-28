@@ -39,6 +39,7 @@ const connecting = {}; // uniqueId -> Promise (socket sedang dibuat)
 const sendQueues = {}; // uniqueId -> ekor antrean
 const pendingCount = {}; // uniqueId -> jumlah kiriman menunggu
 const lastSentAt = {}; // uniqueId -> waktu kirim terakhir
+const connectedSince = {}; // uniqueId -> waktu socket terhubung
 const MIN_GAP_MS = 4000; // jeda minimum antar pesan pada 1 nomor
 const GAP_JITTER_MS = 1500; // acak tambahan supaya tidak seperti robot
 const MAX_QUEUE = 8; // lebih dari ini ditolak, jangan menumpuk
@@ -65,22 +66,25 @@ const getUniqueId = (storeCode) => {
 const getSessionInfo = async (storeCode) => {
   const uniqueId = getUniqueId(storeCode);
   const sock = clients[uniqueId];
+  const shared = isBazarBranch(storeCode);
 
-  if (!sock) return { status: "DISCONNECTED", info: null };
-
-  // Cek apakah user object ada (tandanya sudah login)
-  if (sock.user) {
+  if (sock?.user) {
     return {
       status: "CONNECTED",
+      shared,
       info: {
         pushname: sock.user.name || "WhatsApp User",
-        wid: { user: sock.user.id.split(":")[0] }, // Ambil nomornya saja
+        wid: { user: sock.user.id.split(":")[0] },
         platform: "Baileys",
+        connectedAt: connectedSince[uniqueId]
+          ? new Date(connectedSince[uniqueId]).toISOString()
+          : null,
+        queue: pendingCount[uniqueId] || 0,
       },
     };
   }
 
-  return { status: "DISCONNECTED", info: null };
+  return { status: "DISCONNECTED", shared, info: null };
 };
 
 const startSocket = async (storeCode, uniqueId) => {
@@ -121,6 +125,7 @@ const startSocket = async (storeCode, uniqueId) => {
         // Hanya hapus kalau yang tertutup memang socket yang sedang aktif
         if (clients[uniqueId] === sock) {
           delete clients[uniqueId];
+          delete connectedSince[uniqueId];
         }
 
         if (statusCode === DisconnectReason.loggedOut) {
@@ -147,6 +152,7 @@ const startSocket = async (storeCode, uniqueId) => {
         reject(new Error("Koneksi WA terputus sebelum tersambung."));
       } else if (connection === "open") {
         console.log(`[BAILEYS] ${uniqueId} BERHASIL TERHUBUNG!`);
+        connectedSince[uniqueId] = Date.now();
         delete qrStore[uniqueId];
         resolve(null);
       }
@@ -367,6 +373,7 @@ const deleteSession = async (storeCode) => {
   }
 
   delete qrStore[uniqueId];
+  delete connectedSince[uniqueId];
   delete connecting[uniqueId];
 
   return { success: true };

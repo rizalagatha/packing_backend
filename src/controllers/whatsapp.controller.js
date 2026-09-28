@@ -87,9 +87,43 @@ const getSendLog = async (req, res) => {
   }
 };
 
+const getSessionActivity = async (req, res) => {
+  try {
+    const sessionKey = whatsappService.getUniqueId(req.user.cabang);
+    const [rows] = await pool.query(
+      `SELECT user_kode, cabang, COUNT(*) AS total,
+              SUM(status = 'OK') AS ok, MAX(created_at) AS last_at
+       FROM twa_send_log
+       WHERE session_key = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+       GROUP BY user_kode, cabang
+       ORDER BY last_at DESC`,
+      [sessionKey],
+    );
+    const senders = rows.map((r) => ({
+      user_kode: r.user_kode,
+      cabang: r.cabang,
+      total: Number(r.total) || 0,
+      ok: Number(r.ok) || 0,
+      last_at: r.last_at,
+    }));
+    const total = senders.reduce((sum, r) => sum + r.total, 0);
+    const ok = senders.reduce((sum, r) => sum + r.ok, 0);
+    res.status(200).json({
+      success: true,
+      data: { total, ok, gagal: total - ok, senders },
+    });
+  } catch (error) {
+    console.error("Error getSessionActivity:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal memuat aktivitas sesi." });
+  }
+};
+
 module.exports = {
   getQrCode,
   logout,
   getSessionStatus,
   getSendLog,
+  getSessionActivity,
 };

@@ -13,6 +13,8 @@ router.get("/status", whatsappController.getSessionStatus);
 
 router.get("/log", whatsappController.getSendLog);
 
+router.get("/activity", whatsappController.getSessionActivity);
+
 // Endpoint untuk menghapus sesi
 router.delete("/session", whatsappController.logout);
 
