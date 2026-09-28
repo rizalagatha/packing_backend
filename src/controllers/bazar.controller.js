@@ -936,6 +936,42 @@ const getBazarKoreksiHistory = async (req, res) => {
   }
 };
 
+// GET /bazar/images/:kode  -> semua gambar produk, urut img_index
+const getBazarProductImages = async (req, res) => {
+  const kode = String(req.params.kode || "").trim();
+  if (!kode) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Kode barang tidak valid." });
+  }
+  try {
+    const [rows] = await pool.query(
+      `SELECT img_url FROM tbarangdc_images
+       WHERE img_brg_kode = ? AND img_url IS NOT NULL AND img_url <> ''
+       ORDER BY img_index ASC
+       LIMIT 10`,
+      [kode],
+    );
+    let images = rows.map((r) => r.img_url);
+
+    // Fallback: barang lama yang belum punya baris di tbarangdc_images
+    if (images.length === 0) {
+      const [[hdr]] = await pool.query(
+        "SELECT brg_gambar_url FROM tbarangdc WHERE brg_kode = ? LIMIT 1",
+        [kode],
+      );
+      if (hdr?.brg_gambar_url) {
+        images = [hdr.brg_gambar_url];
+      }
+    }
+
+    res.status(200).json({ success: true, data: images });
+  } catch (error) {
+    console.error("Error getBazarProductImages:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat gambar." });
+  }
+};
+
 module.exports = {
   downloadMasterBazar,
   uploadKoreksiBazar,
@@ -951,4 +987,5 @@ module.exports = {
   getBazarSalesHistory,
   getBazarSaleDetail,
   getBazarKoreksiHistory,
+  getBazarProductImages,
 };
