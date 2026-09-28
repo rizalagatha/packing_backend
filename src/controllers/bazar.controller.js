@@ -538,13 +538,17 @@ const checkoutBazar = async (req, res) => {
     await connection.beginTransaction();
     inTransaction = true;
 
+    const hpCustomer = String(header.so_hp || "")
+      .replace(/[^0-9]/g, "")
+      .slice(0, 15);
+
     await connection.query(
       `INSERT INTO tinv_hdr_tmp (
         inv_id, inv_nomor, inv_tanggal, inv_cus_kode,
         inv_rptunai, inv_rpvoucher, inv_rpcard, inv_nocard, inv_namabank,
         inv_jeniscard, inv_nosetor, user_create, date_create, inv_klerek,
-        inv_ket, inv_kembali
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), '0', ?, ?)`,
+        inv_ket, inv_kembali, inv_mem_hp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), '0', ?, ?, ?)`,
       [
         invId,
         nomor,
@@ -560,6 +564,7 @@ const checkoutBazar = async (req, res) => {
         kasir,
         "BAZAR ANDROID",
         kembali,
+        hpCustomer,
       ],
     );
 
@@ -908,6 +913,7 @@ const getBazarSalesHistory = async (req, res) => {
          h.inv_cus_kode AS so_customer,
          IFNULL(c.cus_nama, '') AS cus_nama,
          h.user_create AS so_user_kasir,
+         COALESCE(NULLIF(h.inv_mem_hp, ''), NULLIF(c.cus_telp, ''), '') AS so_hp,
          (SELECT IFNULL(SUM(d.invd_jumlah * (d.invd_harga - IFNULL(d.invd_diskon, 0))), 0)
           FROM tinv_dtl_tmp d WHERE d.invd_inv_nomor = h.inv_nomor) AS so_total
        FROM tinv_hdr_tmp h
@@ -944,6 +950,7 @@ const getBazarSaleDetail = async (req, res) => {
          h.inv_cus_kode AS so_customer,
          IFNULL(c.cus_nama, '') AS cus_nama,
          h.user_create AS so_user_kasir,
+         COALESCE(NULLIF(h.inv_mem_hp, ''), NULLIF(c.cus_telp, ''), '') AS so_hp,
          h.inv_rptunai, h.inv_rpcard, h.inv_rpvoucher,
          IFNULL(h.inv_kembali, 0) AS so_kembali
        FROM tinv_hdr_tmp h
@@ -999,6 +1006,7 @@ const getBazarSaleDetail = async (req, res) => {
           so_customer: h.so_customer,
           cus_nama: h.cus_nama,
           so_user_kasir: h.so_user_kasir,
+          so_hp: h.so_hp,
           so_total: details.reduce(
             (s, i) => s + i.qty * (i.harga - i.diskon),
             0,
