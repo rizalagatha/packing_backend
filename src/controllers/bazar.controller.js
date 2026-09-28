@@ -1090,6 +1090,11 @@ const getBazarProductImages = async (req, res) => {
 
 // POST /bazar/promo-discounts  { barcodes: [...] }
 const getBazarPromoDiscounts = async (req, res) => {
+  console.log(
+    "[promo-discounts]",
+    req.user?.cabang,
+    req.body?.barcodes?.length,
+  );
   const cabang = req.user?.cabang;
   const barcodes = req.body?.barcodes;
   if (!cabang || !Array.isArray(barcodes) || barcodes.length > 100) {
