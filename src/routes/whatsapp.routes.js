@@ -11,6 +11,8 @@ router.get("/qr", whatsappController.getQrCode);
 // Endpoint untuk cek status sesi [BARU]
 router.get("/status", whatsappController.getSessionStatus);
 
+router.get("/log", whatsappController.getSendLog);
+
 // Endpoint untuk menghapus sesi
 router.delete("/session", whatsappController.logout);
 

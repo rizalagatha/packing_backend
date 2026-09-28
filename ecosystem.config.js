@@ -24,6 +24,7 @@ module.exports = {
         DB_DATABASE: process.env.DB_NAME_PROD, // Pakai DB Prod
         DB_PORT: process.env.DB_PORT,
         JWT_SECRET: process.env.JWT_SECRET,
+        WA_BAZAR_ADMINS: process.env.WA_BAZAR_ADMINS,
       },
     },
     {
@@ -48,6 +49,7 @@ module.exports = {
         DB_DATABASE: process.env.DB_NAME_TRIAL, // Pakai DB Trial
         DB_PORT: process.env.DB_PORT,
         JWT_SECRET: process.env.JWT_SECRET,
+        WA_BAZAR_ADMINS: process.env.WA_BAZAR_ADMINS,
       },
     },
     {
@@ -71,6 +73,7 @@ module.exports = {
         DB_DATABASE: process.env.DB_NAME_TRIAL, // Pakai DB Trial
         DB_PORT: process.env.DB_PORT,
         JWT_SECRET: process.env.JWT_SECRET,
+        WA_BAZAR_ADMINS: process.env.WA_BAZAR_ADMINS,
       },
     },
   ],
