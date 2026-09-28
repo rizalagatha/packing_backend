@@ -712,18 +712,48 @@ const getBazarProduct = async (req, res) => {
   }
 };
 
-// GET /bazar/filters
+// GET /bazar/filters?onlyStock=1
 const getBazarFilterOptions = async (req, res) => {
+  const cabang = req.user?.cabang;
+  const onlyStock = String(req.query.onlyStock) === "1";
+
+  if (onlyStock && !cabang) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Cabang tidak diketahui." });
+  }
+
   try {
     const distinct = (col) =>
       pool.query(
         `SELECT DISTINCT ${col} AS v FROM tbarangdc WHERE ${col} IS NOT NULL AND ${col} <> '' ORDER BY v`,
       );
+
+    // Jenis kain yang punya minimal 1 ukuran berstok di cabang ini
+    const jenisKainWithStock = () =>
+      pool.query(
+        `SELECT DISTINCT h.brg_jeniskain AS v
+         FROM tbarangdc h
+         JOIN tbarangdc_dtl d ON d.brgd_kode = h.brg_kode
+         JOIN (
+           SELECT mst_brg_kode, mst_ukuran, SUM(mst_stok_in - mst_stok_out) AS stok
+           FROM tmasterstok
+           WHERE mst_aktif = 'Y' AND mst_cab = ?
+           GROUP BY mst_brg_kode, mst_ukuran
+           HAVING stok > 0
+         ) s ON s.mst_brg_kode = d.brgd_kode AND s.mst_ukuran = d.brgd_ukuran
+         WHERE h.brg_jeniskain IS NOT NULL AND h.brg_jeniskain <> ''
+           AND d.brgd_barcode IS NOT NULL AND TRIM(d.brgd_barcode) <> ''
+         ORDER BY v`,
+        [cabang],
+      );
+
     const [[kategori], [tipe], [jenisKain]] = await Promise.all([
       distinct("brg_ktg"),
       distinct("brg_ktgp"),
-      distinct("brg_jeniskain"),
+      onlyStock ? jenisKainWithStock() : distinct("brg_jeniskain"),
     ]);
+
     res.status(200).json({
       success: true,
       data: {
