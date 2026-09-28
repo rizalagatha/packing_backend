@@ -293,6 +293,10 @@ const getRealTimeStock = async (req, res) => {
         ${dynamicColumns}
         , SUM(IFNULL(s.stok, 0)) AS total_stok
         , ${bufferSubquery} AS Buffer
+        , COALESCE(
+            (SELECT img_url FROM tbarangdc_images WHERE img_brg_kode = a.brg_kode ORDER BY img_index ASC LIMIT 1),
+            (SELECT brg_gambar_url FROM tbarangdc WHERE brg_kode = a.brg_kode LIMIT 1)
+          ) AS gambar_url
     FROM tbarangdc a
     LEFT JOIN (
         SELECT m.mst_brg_kode, m.mst_ukuran, SUM(m.mst_stok_in - m.mst_stok_out) as stok
