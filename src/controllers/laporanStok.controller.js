@@ -1,5 +1,6 @@
 const pool = require("../config/database");
 const { format } = require("date-fns");
+const { PENDING_SALES_SQL } = require("../services/bazarPending.service");
 
 /**
  * Melengkapi setiap row hasil getRealTimeStock dengan breakdown
@@ -101,6 +102,37 @@ const attachPesananDetail = async (connection, rows, gudang) => {
 };
 
 /**
+ * Kurangi stok per ukuran dengan penjualan bazar yang belum diklerek.
+ * Baris yang total stoknya jadi 0 disembunyikan kalau "Tampilkan Stok 0" mati.
+ */
+const applyPendingBazarSales = async (connection, rows, gudang, isShowZero) => {
+  const [pending] = await connection.query(PENDING_SALES_SQL, [`${gudang}-%`]);
+  if (pending.length === 0) {
+    return rows;
+  }
+
+  const map = {};
+  pending.forEach((p) => {
+    if (!map[p.kode]) map[p.kode] = {};
+    map[p.kode][p.ukuran] = Number(p.qty);
+  });
+
+  rows.forEach((row) => {
+    const byUkuran = map[row.kode];
+    if (!byUkuran) return;
+    Object.keys(byUkuran).forEach((ukuran) => {
+      const qty = byUkuran[ukuran];
+      if (row[ukuran] !== undefined) {
+        row[ukuran] = Number(row[ukuran]) - qty;
+      }
+      row.total_stok = Number(row.total_stok) - qty;
+    });
+  });
+
+  return isShowZero ? rows : rows.filter((r) => Number(r.total_stok) > 0);
+};
+
+/**
  * Mendapatkan Stok Real Time (Semua barang)
  * Dioptimalkan untuk Mobile dengan filter pencarian
  */
@@ -147,6 +179,9 @@ const getRealTimeStock = async (req, res) => {
     // 3. Mode "toko spesifik" — Pesanan Booked/Ready cuma bermakna untuk 1
     // cabang toko tertentu, dihitung terpisah lewat attachPesananDetail() di bawah.
     const isStoreMode = !!gudang && gudang !== "ALL" && gudang !== "KDC";
+
+    const isBazarGudang =
+      !!gudang && String(gudang).toUpperCase().startsWith("B");
 
     let pesananCTESql = "";
     let pesananSelectSql = ", 0 AS pesananBooked, 0 AS pesananReady";
@@ -321,7 +356,13 @@ const getRealTimeStock = async (req, res) => {
     LIMIT 500;
 `;
 
-    const [rows] = await connection.query(query, params);
+    const [fetchedRows] = await connection.query(query, params);
+    let rows = fetchedRows;
+
+    // 8b. Kurangi penjualan bazar yang belum diklerek (bukan untuk mode Pesanan)
+    if (isBazarGudang && jenisStok !== "pesanan") {
+      rows = await applyPendingBazarSales(connection, rows, gudang, isShowZero);
+    }
 
     // 9. Lengkapi breakdown Pesanan Booked & Ready per ukuran (hanya mode toko spesifik)
     if (isStoreMode) {

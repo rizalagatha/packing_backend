@@ -1,4 +1,5 @@
 const pool = require("../config/database");
+const { PENDING_SALES_SQL } = require("../services/bazarPending.service");
 
 const downloadMasterBazar = async (req, res) => {
   // 1. Ambil parameter cabang dari query string (WAJIB ADA)
@@ -503,13 +504,6 @@ const checkoutBazar = async (req, res) => {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [invId, invdIdd, nomor, itemCode, itemSize, itemQty, d.harga, 0, i + 1],
       );
-
-      await connection.query(
-        `UPDATE tmasterstok
-         SET mst_stok_out = mst_stok_out + ?
-         WHERE mst_brg_kode = ? AND mst_cab = ? AND mst_ukuran = ?`,
-        [itemQty, itemCode, cabang, itemSize],
-      );
     }
 
     await connection.commit();
@@ -649,7 +643,7 @@ const searchBazarCatalog = async (req, res) => {
     });
 
     const [rows] = await pool.query(
-      `SELECT p.*, IFNULL(s.stok, 0) AS stok
+      `SELECT p.*, (IFNULL(s.stok, 0) - IFNULL(pn.qty, 0)) AS stok
        FROM (${PRODUCT_SELECT} WHERE ${whereSql}) p
        LEFT JOIN (
          SELECT m.mst_brg_kode, m.mst_ukuran, SUM(m.mst_stok_in - m.mst_stok_out) AS stok
@@ -657,10 +651,11 @@ const searchBazarCatalog = async (req, res) => {
          WHERE m.mst_aktif = 'Y' AND m.mst_cab = ?
          GROUP BY m.mst_brg_kode, m.mst_ukuran
        ) s ON s.mst_brg_kode = p.kode AND s.mst_ukuran = p.ukuran
-       ${onlyStock ? "WHERE IFNULL(s.stok, 0) > 0" : ""}
+       LEFT JOIN (${PENDING_SALES_SQL}) pn ON pn.kode = p.kode AND pn.ukuran = p.ukuran
+       ${onlyStock ? "WHERE (IFNULL(s.stok, 0) - IFNULL(pn.qty, 0)) > 0" : ""}
        ORDER BY (p.gambar_url IS NULL OR p.gambar_url = '') ASC, p.kode ASC, p.barcode ASC
        LIMIT ? OFFSET ?`,
-      [...params, cabang, limit, offset],
+      [...params, cabang, `${cabang}-%`, limit, offset],
     );
 
     res.status(200).json({
@@ -702,10 +697,15 @@ const getBazarProduct = async (req, res) => {
        WHERE mst_aktif = 'Y' AND mst_cab = ? AND mst_brg_kode = ? AND mst_ukuran = ?`,
       [cabang, product.kode, product.ukuran],
     );
-    res.status(200).json({
-      success: true,
-      data: { ...product, stok: Number(stokRow.stok) || 0 },
-    });
+    const [[pendRow]] = await pool.query(
+      `SELECT IFNULL(SUM(d.invd_jumlah), 0) AS qty
+       FROM tinv_hdr_tmp h
+       JOIN tinv_dtl_tmp d ON d.invd_inv_nomor = h.inv_nomor
+       WHERE h.inv_nomor LIKE ? AND d.invd_kode = ?`,
+      [`${cabang}-%`, product.barcode],
+    );
+    const stok = (Number(stokRow.stok) || 0) - (Number(pendRow.qty) || 0);
+    res.status(200).json({ success: true, data: { ...product, stok } });
   } catch (error) {
     console.error("Error getBazarProduct:", error);
     res.status(500).json({ success: false, message: "Gagal memuat barang." });
