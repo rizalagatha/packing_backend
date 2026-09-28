@@ -87,14 +87,40 @@ const getSessionInfo = async (storeCode) => {
   return { status: "DISCONNECTED", shared, info: null };
 };
 
+const QR_WAIT_MS = 25000;
+
 const startSocket = async (storeCode, uniqueId) => {
   const sessionPath = path.join(SESSION_DIR, uniqueId);
   console.log(`[BAILEYS] Memulai sesi untuk: ${uniqueId}`);
 
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-  const { version } = await fetchLatestBaileysVersion();
+
+  // Ambil versi WA Web terbaru, tapi jangan menunggu tanpa batas kalau
+  // server tidak bisa mengakses internet. Tanpa versi, Baileys pakai bawaan.
+  let version;
+  try {
+    const latest = await Promise.race([
+      fetchLatestBaileysVersion(),
+      new Promise((resolve) => setTimeout(() => resolve({}), 8000)),
+    ]);
+    version = latest.version;
+  } catch (e) {}
+  console.log(
+    `[BAILEYS] ${uniqueId} versi WA Web: ${version ? version.join(".") : "bawaan"}`,
+  );
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let abandoned = false;
+    let waitTimer = null;
+
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(waitTimer);
+      fn(value);
+    };
+
     const sock = makeWASocket({
       version,
       auth: state,
@@ -105,6 +131,24 @@ const startSocket = async (storeCode, uniqueId) => {
     });
 
     clients[uniqueId] = sock;
+
+    // Kalau QR tidak muncul dalam batas waktu, batalkan supaya request
+    // tidak menggantung dan percobaan berikutnya mulai dari nol.
+    waitTimer = setTimeout(() => {
+      if (settled) return;
+      abandoned = true;
+      console.warn(
+        `[BAILEYS] ${uniqueId} tidak menghasilkan QR dalam ${QR_WAIT_MS / 1000} detik.`,
+      );
+      try {
+        sock.end(undefined);
+      } catch (e) {}
+      if (clients[uniqueId] === sock) {
+        delete clients[uniqueId];
+      }
+      finish(reject, new Error("QR_TIMEOUT"));
+    }, QR_WAIT_MS);
+
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", (update) => {
@@ -113,16 +157,17 @@ const startSocket = async (storeCode, uniqueId) => {
       if (qr) {
         console.log(`[BAILEYS] QR Baru diterima untuk ${uniqueId}`);
         qrStore[uniqueId] = qr;
-        resolve(qr);
+        finish(resolve, qr);
       }
 
       if (connection === "close") {
+        if (abandoned) return;
+
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         console.log(
           `[BAILEYS] Koneksi ${uniqueId} terputus. Kode: ${statusCode}`,
         );
 
-        // Hanya hapus kalau yang tertutup memang socket yang sedang aktif
         if (clients[uniqueId] === sock) {
           delete clients[uniqueId];
           delete connectedSince[uniqueId];
@@ -135,8 +180,6 @@ const startSocket = async (storeCode, uniqueId) => {
             fs.rmSync(sessionPath, { recursive: true, force: true });
           } catch (e) {}
         } else if (statusCode === DisconnectReason.connectionReplaced) {
-          // Ada instance lain memakai sesi yang sama. Jangan reconnect,
-          // kalau tidak dua instance akan saling menendang tanpa henti.
           console.warn(`[BAILEYS] ${uniqueId} digantikan koneksi lain.`);
         } else {
           setTimeout(() => {
@@ -148,13 +191,12 @@ const startSocket = async (storeCode, uniqueId) => {
             );
           }, 3000);
         }
-        // Tidak berpengaruh kalau promise sudah selesai karena QR / open
-        reject(new Error("Koneksi WA terputus sebelum tersambung."));
+        finish(reject, new Error("Koneksi WA terputus sebelum tersambung."));
       } else if (connection === "open") {
         console.log(`[BAILEYS] ${uniqueId} BERHASIL TERHUBUNG!`);
         connectedSince[uniqueId] = Date.now();
         delete qrStore[uniqueId];
-        resolve(null);
+        finish(resolve, null);
       }
     });
   });

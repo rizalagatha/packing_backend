@@ -18,6 +18,9 @@ const canManageSession = (user) => {
 
 const getQrCode = async (req, res) => {
   try {
+    console.log(
+      `[WA] /qr diminta oleh ${req.user.kode} (cabang ${req.user.cabang})`,
+    );
     const storeCode = req.user.cabang;
 
     if (!canManageSession(req.user)) {
@@ -31,7 +34,14 @@ const getQrCode = async (req, res) => {
     const qr = await whatsappService.createClient(storeCode);
     res.status(200).json({ success: true, data: { qr } });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Gagal membuat QR Code." });
+    console.error("[WA] getQrCode gagal:", error.message);
+    const timedOut = error.message === "QR_TIMEOUT";
+    res.status(timedOut ? 504 : 500).json({
+      success: false,
+      message: timedOut
+        ? "WhatsApp tidak merespons dalam 25 detik. Cek koneksi internet server, lalu coba lagi."
+        : "Gagal membuat QR Code.",
+    });
   }
 };
 

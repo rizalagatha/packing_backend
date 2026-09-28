@@ -619,7 +619,7 @@ const getPrintData = async (req, res) => {
 const sendReceiptWa = async (req, res) => {
   try {
     const { nomor, hp } = req.body;
-    const { cabang } = req.user;
+    const { cabang, kode } = req.user;
 
     // 1. Validasi & Format HP
     if (!hp)
@@ -715,6 +715,7 @@ const sendReceiptWa = async (req, res) => {
       cabang,
       cleanHp,
       message,
+      { user: kode },
     );
 
     if (result.success) {
@@ -745,7 +746,7 @@ const sendReceiptWaImage = async (req, res) => {
     try {
       const { hp, caption } = req.body;
       const file = req.file;
-      const { cabang } = req.user;
+      const { cabang, kode } = req.user;
 
       // VALIDASI DETIL
       if (!file) {
@@ -772,6 +773,7 @@ const sendReceiptWaImage = async (req, res) => {
         cleanHp,
         file.buffer,
         caption || "Struk Belanja",
+        { user: kode },
       );
 
       if (result.success) {
