@@ -625,8 +625,14 @@ const buildCatalogWhere = ({ q, kategori, tipe, jenisKain }) => {
   return { whereSql: where.join(" AND "), params };
 };
 
-// GET /bazar/catalog?q&kategori&tipe&jenisKain&offset&limit
+// GET /bazar/catalog?q&kategori&tipe&jenisKain&offset&limit&onlyStock=1
 const searchBazarCatalog = async (req, res) => {
+  const cabang = req.user?.cabang;
+  if (!cabang) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Cabang tidak diketahui." });
+  }
   try {
     const { q, kategori, tipe, jenisKain } = req.query;
     const limit = Math.min(
@@ -634,6 +640,7 @@ const searchBazarCatalog = async (req, res) => {
       200,
     );
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const onlyStock = String(req.query.onlyStock) === "1";
     const { whereSql, params } = buildCatalogWhere({
       q,
       kategori,
@@ -641,16 +648,28 @@ const searchBazarCatalog = async (req, res) => {
       jenisKain,
     });
 
-    // Filter barang aktif tidak ada di query download lama, jadi disamakan.
-    // Untuk menyembunyikan barang non-aktif, tambahkan "h.brg_aktif = 0" di whereSql.
     const [rows] = await pool.query(
-      `${PRODUCT_SELECT}
-       WHERE ${whereSql}
-       ORDER BY (gambar_url IS NULL OR gambar_url = '') ASC, kode ASC, barcode ASC
+      `SELECT p.*, IFNULL(s.stok, 0) AS stok
+       FROM (${PRODUCT_SELECT} WHERE ${whereSql}) p
+       LEFT JOIN (
+         SELECT m.mst_brg_kode, m.mst_ukuran, SUM(m.mst_stok_in - m.mst_stok_out) AS stok
+         FROM tmasterstok m
+         WHERE m.mst_aktif = 'Y' AND m.mst_cab = ?
+         GROUP BY m.mst_brg_kode, m.mst_ukuran
+       ) s ON s.mst_brg_kode = p.kode AND s.mst_ukuran = p.ukuran
+       ${onlyStock ? "WHERE IFNULL(s.stok, 0) > 0" : ""}
+       ORDER BY (p.gambar_url IS NULL OR p.gambar_url = '') ASC, p.kode ASC, p.barcode ASC
        LIMIT ? OFFSET ?`,
-      [...params, limit, offset],
+      [...params, cabang, limit, offset],
     );
-    res.status(200).json({ success: true, data: rows.map(normalizeProduct) });
+
+    res.status(200).json({
+      success: true,
+      data: rows.map((r) => ({
+        ...normalizeProduct(r),
+        stok: Number(r.stok) || 0,
+      })),
+    });
   } catch (error) {
     console.error("Error searchBazarCatalog:", error);
     res.status(500).json({ success: false, message: "Gagal memuat katalog." });
