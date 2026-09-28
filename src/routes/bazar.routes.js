@@ -24,5 +24,7 @@ router.post(
   authenticateToken,
   bazarController.createBazarCustomer,
 );
+router.post("/checkout", authenticateToken, bazarController.checkoutBazar);
+router.get("/rekening", authenticateToken, bazarController.getBazarRekening);
 
 module.exports = router;
