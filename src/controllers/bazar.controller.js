@@ -370,6 +370,55 @@ const createBazarCustomer = async (req, res) => {
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
+// Diskon item dari promo master (Diskon Item) yang aktif untuk cabang ini.
+// Pola sama dengan getActivePromos; bila ada beberapa promo, ambil persen tertinggi.
+const resolveItemDiscounts = async (db, cabang, barcodes) => {
+  const list = [
+    ...new Set(
+      (barcodes || [])
+        .map((b) => String(b).trim().toUpperCase())
+        .filter(Boolean),
+    ),
+  ];
+  const result = {};
+  if (list.length === 0) {
+    return result;
+  }
+
+  const [rows] = await db.query(
+    `SELECT UPPER(TRIM(d.brgd_barcode)) AS barcode,
+            MAX(pb.pb_disc) AS persen,
+            MAX(pb.pb_diskon) AS rp
+     FROM tpromo p
+     JOIN tpromo_cabang c ON c.pc_nomor = p.pro_nomor AND c.pc_cab = ?
+     JOIN tpromo_barang pb ON pb.pb_nomor = p.pro_nomor
+     JOIN tbarangdc_dtl d
+       ON d.brgd_kode = pb.pb_brg_kode AND d.brgd_ukuran = pb.pb_ukuran
+     WHERE p.pro_f1 = 'N'
+       AND CURDATE() BETWEEN p.pro_tanggal1 AND p.pro_tanggal2
+       AND (p.pro_mode_barang = 'DISCOUNT' OR p.pro_jenis = 4)
+       AND UPPER(TRIM(d.brgd_barcode)) IN (?)
+     GROUP BY UPPER(TRIM(d.brgd_barcode))`,
+    [cabang, list],
+  );
+  rows.forEach((r) => {
+    result[r.barcode] = {
+      persen: Number(r.persen) || 0,
+      rp: Number(r.rp) || 0,
+    };
+  });
+  return result;
+};
+
+// Diskon per pcs (Rp). Nominal Rp diutamakan, kalau tidak pakai persen.
+const unitDiscount = (harga, disc) => {
+  if (!disc) {
+    return 0;
+  }
+  const raw = disc.rp > 0 ? disc.rp : Math.round((harga * disc.persen) / 100);
+  return Math.max(0, Math.min(raw, harga));
+};
+
 const checkoutBazar = async (req, res) => {
   const { header, details, clientToken, kodeKasir } = req.body;
   const cabang = req.user?.cabang || req.body.cabang;
@@ -431,6 +480,30 @@ const checkoutBazar = async (req, res) => {
           tanggal: new Date(dup[0].date_create || now).toISOString(),
           duplicated: true,
         },
+      });
+    }
+
+    // Diskon promo divalidasi terhadap master (server sebagai acuan)
+    const discMap = await resolveItemDiscounts(
+      connection,
+      cabang,
+      details.map((d) => d.barcode),
+    );
+    const unitDiskons = details.map((d) =>
+      unitDiscount(
+        Number(d.harga) || 0,
+        discMap[String(d.barcode).trim().toUpperCase()],
+      ),
+    );
+    const diskonTidakSesuai = details.some(
+      (d, i) => Math.abs((Number(d.diskonRp) || 0) - unitDiskons[i]) > 0.5,
+    );
+    if (diskonTidakSesuai) {
+      return res.status(409).json({
+        success: false,
+        code: "PROMO_MISMATCH",
+        message:
+          "Promo berubah atau belum sinkron. Keranjang diperbarui, cek total lalu ulangi pembayaran.",
       });
     }
 
@@ -502,7 +575,17 @@ const checkoutBazar = async (req, res) => {
           invd_id, invd_idd, invd_inv_nomor, invd_kode, invd_ukuran,
           invd_jumlah, invd_harga, invd_diskon, invd_nourut
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [invId, invdIdd, nomor, itemCode, itemSize, itemQty, d.harga, 0, i + 1],
+        [
+          invId,
+          invdIdd,
+          nomor,
+          itemCode,
+          itemSize,
+          itemQty,
+          d.harga,
+          unitDiskons[i],
+          i + 1,
+        ],
       );
     }
 
@@ -825,8 +908,8 @@ const getBazarSalesHistory = async (req, res) => {
          h.inv_cus_kode AS so_customer,
          IFNULL(c.cus_nama, '') AS cus_nama,
          h.user_create AS so_user_kasir,
-         (SELECT IFNULL(SUM(d.invd_jumlah * d.invd_harga), 0)
-            FROM tinv_dtl_tmp d WHERE d.invd_inv_nomor = h.inv_nomor) AS so_total
+         (SELECT IFNULL(SUM(d.invd_jumlah * (d.invd_harga - IFNULL(d.invd_diskon, 0))), 0)
+          FROM tinv_dtl_tmp d WHERE d.invd_inv_nomor = h.inv_nomor) AS so_total
        FROM tinv_hdr_tmp h
        LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode
        WHERE h.inv_nomor LIKE ? AND h.inv_tanggal BETWEEN ? AND ?
@@ -916,7 +999,10 @@ const getBazarSaleDetail = async (req, res) => {
           so_customer: h.so_customer,
           cus_nama: h.cus_nama,
           so_user_kasir: h.so_user_kasir,
-          so_total: details.reduce((s, i) => s + i.qty * i.harga, 0),
+          so_total: details.reduce(
+            (s, i) => s + i.qty * (i.harga - i.diskon),
+            0,
+          ),
           so_cash: cash,
           so_card: card,
           so_voucher: voucher,
@@ -1002,6 +1088,24 @@ const getBazarProductImages = async (req, res) => {
   }
 };
 
+// POST /bazar/promo-discounts  { barcodes: [...] }
+const getBazarPromoDiscounts = async (req, res) => {
+  const cabang = req.user?.cabang;
+  const barcodes = req.body?.barcodes;
+  if (!cabang || !Array.isArray(barcodes) || barcodes.length > 100) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Data tidak valid." });
+  }
+  try {
+    const data = await resolveItemDiscounts(pool, cabang, barcodes);
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("Error getBazarPromoDiscounts:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat promo." });
+  }
+};
+
 module.exports = {
   downloadMasterBazar,
   uploadKoreksiBazar,
@@ -1018,4 +1122,5 @@ module.exports = {
   getBazarSaleDetail,
   getBazarKoreksiHistory,
   getBazarProductImages,
+  getBazarPromoDiscounts,
 };
