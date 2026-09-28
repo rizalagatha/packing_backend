@@ -63,6 +63,10 @@ router.get(
   authenticateToken,
   bazarController.getBazarProductImages,
 );
-router.post("/promo-discounts", bazarController.getBazarPromoDiscounts);
+router.post(
+  "/promo-discounts",
+  authenticateToken,
+  bazarController.getBazarPromoDiscounts,
+);
 
 module.exports = router;
