@@ -128,6 +128,12 @@ const uploadKoreksiBazar = async (req, res) => {
       .json({ success: true, message: "Koreksi stok berhasil di-upload." });
   } catch (error) {
     await connection.rollback();
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(200).json({
+        success: true,
+        message: "Koreksi ini sudah tersimpan sebelumnya.",
+      });
+    }
     console.error("Error uploadKoreksiBazar:", error);
     res.status(500).json({
       success: false,
@@ -556,6 +562,361 @@ const getBazarRekening = async (req, res) => {
   }
 };
 
+// ===== Fase 2 & 3: Bazar online =====
+
+const namaExpr = (a) =>
+  `TRIM(CONCAT_WS(' ', ${a}.brg_jeniskaos, ${a}.brg_tipe, ${a}.brg_lengan, ${a}.brg_jeniskain, ${a}.brg_warna))`;
+
+const PRODUCT_SELECT = `
+  SELECT
+    TRIM(d.brgd_barcode) AS barcode,
+    d.brgd_kode AS kode,
+    ${namaExpr("h")} AS nama,
+    IFNULL(d.brgd_ukuran, '') AS ukuran,
+    IFNULL(d.brgd_harga, 0) AS harga_jual,
+    IFNULL(d.brgd_hrg1, 0) AS harga_spesial,
+    IFNULL(h.brg_minqty, 0) AS promo_qty,
+    IFNULL(h.brg_ket, '') AS keterangan,
+    IFNULL(h.brg_ktg, '') AS kategori,
+    IFNULL(h.brg_ktgp, '') AS tipe_produk,
+    IFNULL(h.brg_jeniskain, '') AS jenis_kain,
+    COALESCE(
+      (SELECT img_url FROM tbarangdc_images WHERE img_brg_kode = h.brg_kode ORDER BY img_index ASC LIMIT 1),
+      h.brg_gambar_url
+    ) AS gambar_url
+  FROM tbarangdc_dtl d
+  LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
+`;
+
+const normalizeProduct = (r) => ({
+  ...r,
+  harga_jual: Number(r.harga_jual) || 0,
+  harga_spesial: Number(r.harga_spesial) || 0,
+  promo_qty: Number(r.promo_qty) || 0,
+});
+
+const buildCatalogWhere = ({ q, kategori, tipe, jenisKain }) => {
+  const where = ["d.brgd_barcode IS NOT NULL", "TRIM(d.brgd_barcode) <> ''"];
+  const params = [];
+
+  const words = String(q || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  for (const w of words) {
+    const like = `%${w}%`;
+    where.push(
+      `(d.brgd_barcode LIKE ? OR d.brgd_kode LIKE ? OR CONCAT_WS(' ', h.brg_jeniskaos, h.brg_tipe, h.brg_lengan, h.brg_jeniskain, h.brg_warna) LIKE ?)`,
+    );
+    params.push(like, like, like);
+  }
+  if (kategori && kategori !== "SEMUA") {
+    where.push("h.brg_ktg = ?");
+    params.push(kategori);
+  }
+  if (tipe && tipe !== "SEMUA") {
+    where.push("h.brg_ktgp = ?");
+    params.push(tipe);
+  }
+  if (jenisKain && jenisKain !== "SEMUA") {
+    where.push("h.brg_jeniskain = ?");
+    params.push(jenisKain);
+  }
+  return { whereSql: where.join(" AND "), params };
+};
+
+// GET /bazar/catalog?q&kategori&tipe&jenisKain&offset&limit
+const searchBazarCatalog = async (req, res) => {
+  try {
+    const { q, kategori, tipe, jenisKain } = req.query;
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit, 10) || 60, 1),
+      200,
+    );
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const { whereSql, params } = buildCatalogWhere({
+      q,
+      kategori,
+      tipe,
+      jenisKain,
+    });
+
+    // Filter barang aktif tidak ada di query download lama, jadi disamakan.
+    // Untuk menyembunyikan barang non-aktif, tambahkan "h.brg_aktif = 0" di whereSql.
+    const [rows] = await pool.query(
+      `${PRODUCT_SELECT}
+       WHERE ${whereSql}
+       ORDER BY (gambar_url IS NULL OR gambar_url = '') ASC, kode ASC, barcode ASC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    );
+    res.status(200).json({ success: true, data: rows.map(normalizeProduct) });
+  } catch (error) {
+    console.error("Error searchBazarCatalog:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat katalog." });
+  }
+};
+
+// GET /bazar/product/:barcode  (sekalian stok live di cabang user)
+const getBazarProduct = async (req, res) => {
+  const cabang = req.user?.cabang;
+  const barcode = String(req.params.barcode || "").trim();
+  if (!cabang || !barcode) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Barcode/cabang tidak valid." });
+  }
+  try {
+    const [rows] = await pool.query(
+      `${PRODUCT_SELECT} WHERE TRIM(d.brgd_barcode) = ? LIMIT 1`,
+      [barcode],
+    );
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Barang tidak ditemukan." });
+    }
+    const product = normalizeProduct(rows[0]);
+    const [[stokRow]] = await pool.query(
+      `SELECT IFNULL(SUM(mst_stok_in - mst_stok_out), 0) AS stok
+       FROM tmasterstok
+       WHERE mst_aktif = 'Y' AND mst_cab = ? AND mst_brg_kode = ? AND mst_ukuran = ?`,
+      [cabang, product.kode, product.ukuran],
+    );
+    res.status(200).json({
+      success: true,
+      data: { ...product, stok: Number(stokRow.stok) || 0 },
+    });
+  } catch (error) {
+    console.error("Error getBazarProduct:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat barang." });
+  }
+};
+
+// GET /bazar/filters
+const getBazarFilterOptions = async (req, res) => {
+  try {
+    const distinct = (col) =>
+      pool.query(
+        `SELECT DISTINCT ${col} AS v FROM tbarangdc WHERE ${col} IS NOT NULL AND ${col} <> '' ORDER BY v`,
+      );
+    const [[kategori], [tipe], [jenisKain]] = await Promise.all([
+      distinct("brg_ktg"),
+      distinct("brg_ktgp"),
+      distinct("brg_jeniskain"),
+    ]);
+    res.status(200).json({
+      success: true,
+      data: {
+        kategori: kategori.map((r) => r.v),
+        tipe: tipe.map((r) => r.v),
+        jenisKain: jenisKain.map((r) => r.v),
+      },
+    });
+  } catch (error) {
+    console.error("Error getBazarFilterOptions:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat filter." });
+  }
+};
+
+// GET /bazar/customers?q=
+const searchBazarCustomers = async (req, res) => {
+  const like = `%${String(req.query.q || "").trim()}%`;
+  try {
+    const [rows] = await pool.query(
+      `SELECT cus_kode, cus_nama, IFNULL(cus_alamat, '') AS cus_alamat
+       FROM tcustomer
+       WHERE cus_nama LIKE ? OR cus_kode LIKE ?
+       ORDER BY cus_nama ASC
+       LIMIT 100`,
+      [like, like],
+    );
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error searchBazarCustomers:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat customer." });
+  }
+};
+
+// GET /bazar/default-customer
+const getBazarDefaultCustomer = async (req, res) => {
+  const cabang = req.user?.cabang;
+  try {
+    const [rows] = await pool.query(
+      "SELECT cus_kode AS kode, cus_nama AS nama FROM tcustomer WHERE cus_kode = ? LIMIT 1",
+      [`${cabang}00000`],
+    );
+    res.status(200).json({ success: true, data: rows[0] || null });
+  } catch (error) {
+    console.error("Error getBazarDefaultCustomer:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat customer." });
+  }
+};
+
+// GET /bazar/history?startDate&endDate  (default 7 hari terakhir)
+const getBazarSalesHistory = async (req, res) => {
+  const cabang = req.user?.cabang;
+  if (!cabang) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Cabang tidak diketahui." });
+  }
+  const fmt = (d) =>
+    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const today = new Date();
+  const weekAgo = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
+  const startDate = req.query.startDate || fmt(weekAgo);
+  const endDate = req.query.endDate || fmt(today);
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT
+         h.inv_nomor AS so_nomor,
+         h.date_create AS so_tanggal,
+         h.inv_cus_kode AS so_customer,
+         IFNULL(c.cus_nama, '') AS cus_nama,
+         h.user_create AS so_user_kasir,
+         (SELECT IFNULL(SUM(d.invd_jumlah * d.invd_harga), 0)
+            FROM tinv_dtl_tmp d WHERE d.invd_inv_nomor = h.inv_nomor) AS so_total
+       FROM tinv_hdr_tmp h
+       LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode
+       WHERE h.inv_nomor LIKE ? AND h.inv_tanggal BETWEEN ? AND ?
+       ORDER BY h.date_create DESC
+       LIMIT 200`,
+      [`${cabang}-%`, startDate, endDate],
+    );
+    res.status(200).json({
+      success: true,
+      data: rows.map((r) => ({ ...r, so_total: Number(r.so_total) || 0 })),
+    });
+  } catch (error) {
+    console.error("Error getBazarSalesHistory:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat riwayat." });
+  }
+};
+
+// GET /bazar/history/:nomor  -> bentuk sama dengan yang dibaca StrukModal (isBazar)
+const getBazarSaleDetail = async (req, res) => {
+  const cabang = req.user?.cabang;
+  const nomor = String(req.params.nomor || "");
+  if (!cabang || !nomor.startsWith(`${cabang}-`)) {
+    return res
+      .status(404)
+      .json({ success: false, message: "Nota tidak ditemukan." });
+  }
+  try {
+    const [hdrRows] = await pool.query(
+      `SELECT
+         h.inv_nomor AS so_nomor,
+         h.date_create AS so_tanggal,
+         h.inv_cus_kode AS so_customer,
+         IFNULL(c.cus_nama, '') AS cus_nama,
+         h.user_create AS so_user_kasir,
+         h.inv_rptunai, h.inv_rpcard, h.inv_rpvoucher,
+         IFNULL(h.inv_kembali, 0) AS so_kembali
+       FROM tinv_hdr_tmp h
+       LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode
+       WHERE h.inv_nomor = ? LIMIT 1`,
+      [nomor],
+    );
+    if (hdrRows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Nota tidak ditemukan." });
+    }
+
+    const [dtlRows] = await pool.query(
+      `SELECT
+         d.invd_kode AS barcode,
+         d.invd_ukuran AS ukuran,
+         d.invd_jumlah AS qty,
+         d.invd_harga AS harga,
+         ${namaExpr("a")} AS nama,
+         IFNULL(b.brgd_harga, 0) AS harga_jual,
+         IFNULL(b.brgd_hrg1, 0) AS harga_spesial,
+         IFNULL(a.brg_minqty, 0) AS promo_qty,
+         IFNULL(a.brg_ket, '') AS keterangan
+       FROM tinv_dtl_tmp d
+       LEFT JOIN tbarangdc_dtl b ON TRIM(b.brgd_barcode) = d.invd_kode
+       LEFT JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
+       WHERE d.invd_inv_nomor = ?
+       ORDER BY d.invd_nourut ASC`,
+      [nomor],
+    );
+
+    const details = dtlRows.map((d) => ({
+      ...d,
+      qty: Number(d.qty) || 0,
+      harga: Number(d.harga) || 0,
+      harga_jual: Number(d.harga_jual) || 0,
+      harga_spesial: Number(d.harga_spesial) || 0,
+      promo_qty: Number(d.promo_qty) || 0,
+    }));
+
+    const h = hdrRows[0];
+    const cash = Number(h.inv_rptunai) || 0;
+    const card = Number(h.inv_rpcard) || 0;
+    const voucher = Number(h.inv_rpvoucher) || 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        header: {
+          so_nomor: h.so_nomor,
+          so_tanggal: h.so_tanggal,
+          so_customer: h.so_customer,
+          cus_nama: h.cus_nama,
+          so_user_kasir: h.so_user_kasir,
+          so_total: details.reduce((s, i) => s + i.qty * i.harga, 0),
+          so_cash: cash,
+          so_card: card,
+          so_voucher: voucher,
+          so_bayar: cash + card + voucher,
+          so_kembali: Number(h.so_kembali) || 0,
+        },
+        details,
+      },
+    });
+  } catch (error) {
+    console.error("Error getBazarSaleDetail:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal memuat detail nota." });
+  }
+};
+
+// GET /bazar/koreksi/history
+const getBazarKoreksiHistory = async (req, res) => {
+  const cabang = req.user?.cabang;
+  try {
+    const [rows] = await pool.query(
+      `SELECT
+         h.korh_nomor AS no_koreksi,
+         h.korh_tanggal AS tanggal,
+         h.user_create AS operator,
+         d.kord_brg_kode AS barcode,
+         ${namaExpr("a")} AS nama,
+         d.kord_stok AS qty_sistem,
+         d.kord_qty AS selisih,
+         (d.kord_stok + d.kord_qty) AS qty_fisik
+       FROM tkor_hdr h
+       JOIN tkor_dtl d ON d.kord_korh_nomor = h.korh_nomor
+       LEFT JOIN tbarangdc_dtl b ON TRIM(b.brgd_barcode) = d.kord_brg_kode
+       LEFT JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
+       WHERE h.korh_gdg_kode = ? AND h.korh_notes = 'KOREKSI ANDROID BAZAR'
+       ORDER BY h.date_create DESC, d.kord_brg_kode ASC
+       LIMIT 50`,
+      [cabang],
+    );
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Error getBazarKoreksiHistory:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal memuat riwayat koreksi." });
+  }
+};
+
 module.exports = {
   downloadMasterBazar,
   uploadKoreksiBazar,
@@ -563,4 +924,12 @@ module.exports = {
   createBazarCustomer,
   checkoutBazar,
   getBazarRekening,
+  searchBazarCatalog,
+  getBazarProduct,
+  getBazarFilterOptions,
+  searchBazarCustomers,
+  getBazarDefaultCustomer,
+  getBazarSalesHistory,
+  getBazarSaleDetail,
+  getBazarKoreksiHistory,
 };

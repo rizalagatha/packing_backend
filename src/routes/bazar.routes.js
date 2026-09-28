@@ -24,6 +24,38 @@ router.post(
   authenticateToken,
   bazarController.createBazarCustomer,
 );
+router.get("/catalog", authenticateToken, bazarController.searchBazarCatalog);
+router.get(
+  "/product/:barcode",
+  authenticateToken,
+  bazarController.getBazarProduct,
+);
+router.get(
+  "/filters",
+  authenticateToken,
+  bazarController.getBazarFilterOptions,
+);
+router.get(
+  "/customers",
+  authenticateToken,
+  bazarController.searchBazarCustomers,
+);
+router.get(
+  "/default-customer",
+  authenticateToken,
+  bazarController.getBazarDefaultCustomer,
+);
+router.get("/history", authenticateToken, bazarController.getBazarSalesHistory);
+router.get(
+  "/history/:nomor",
+  authenticateToken,
+  bazarController.getBazarSaleDetail,
+);
+router.get(
+  "/koreksi/history",
+  authenticateToken,
+  bazarController.getBazarKoreksiHistory,
+);
 router.post("/checkout", authenticateToken, bazarController.checkoutBazar);
 router.get("/rekening", authenticateToken, bazarController.getBazarRekening);
 
