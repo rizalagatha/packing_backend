@@ -94,6 +94,6 @@ const getManualTutupBuku = async (modulNama) => {
 
 module.exports = {
   getTanggalTutupBuku,
-  getManualTutupBukuUntukTanggal: getTanggalTutupBukuUntukTanggal,
+  getTanggalTutupBukuUntukTanggal,
   getManualTutupBuku,
 };
