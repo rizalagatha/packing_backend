@@ -309,12 +309,16 @@ const deletePermintaan = async (req, res) => {
     }
 
     // 3. Validasi Tutup Buku — pakai logika resmi sama seperti MANKSI
+    // zdtCloseOtomatis = deadline (bulan record + tgl_close hari) untuk
+    // record ini masih boleh diedit/dihapus. Yang dicek adalah apakah HARI
+    // INI sudah melewati deadline tsb, bukan membandingkan tanggal record itu
+    // sendiri (yang pasti selalu lebih kecil dari deadline bulan berikutnya).
     const zdtCloseOtomatis = await getTanggalTutupBukuUntukTanggal(
       data.min_tanggal,
     );
-    const tglTrs = new Date(data.min_tanggal);
+    const today = new Date();
 
-    if (tglTrs <= zdtCloseOtomatis) {
+    if (today > zdtCloseOtomatis) {
       throw new Error(
         "Transaksi tsb sudah tutup buku (closing otomatis). Tidak bisa dihapus.",
       );
@@ -323,7 +327,7 @@ const deletePermintaan = async (req, res) => {
     // cid di pengaturan.tclose tetap "MINTA ACCESORIES" untuk kedua jenis
     // (ACCESORIES & OBAT) — format lama sebelum digabung jadi satu modul barang garmen
     const zdtCloseManual = await getManualTutupBuku("MINTA ACCESORIES");
-    if (zdtCloseManual && tglTrs <= zdtCloseManual) {
+    if (zdtCloseManual && new Date(data.min_tanggal) <= zdtCloseManual) {
       throw new Error(
         "Transaksi tsb sudah tutup buku (closing manual). Tidak bisa dihapus.",
       );
