@@ -36,7 +36,15 @@ const buildStoreDirectoryText = (rows) => {
     );
     const alamatDasar = (g.rows[0].gdg_inv_alamat || "").trim();
     const alamat = g.kota ? `${alamatDasar}, ${g.kota}` : alamatDasar;
-    const header = g.kota ? `Store ${g.kota}\n` : "";
+
+    // Label khusus (kalau ada baris di grup ini yang punya gdg_label_struk)
+    // menang atas nama kota; kalau tidak ada, judulnya nama kota seperti biasa.
+    const labelKhusus = g.rows
+      .map((r) => (r.gdg_label_struk || "").trim())
+      .find((l) => l !== "");
+    const judul = labelKhusus || g.kota;
+    const header = judul ? `Store ${judul}\n` : "";
+
     return `${header}${lines.join("\n")}\n\n${alamat}`;
   });
 
@@ -49,7 +57,7 @@ const getStoreDirectoryText = async () => {
     return cache;
   }
   const [rows] = await pool.query(
-    `SELECT gdg_kode, gdg_inv_nama, gdg_inv_telp, gdg_inv_alamat, gdg_inv_kota
+    `SELECT gdg_kode, gdg_inv_nama, gdg_inv_telp, gdg_inv_alamat, gdg_inv_kota, gdg_label_struk
      FROM tgudang
      WHERE (gdg_inv_alamat <> '' OR gdg_inv_telp <> '')
        AND (gdg_dc = 0 OR gdg_kode = 'SL1')
