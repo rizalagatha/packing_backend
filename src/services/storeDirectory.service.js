@@ -17,12 +17,6 @@ const CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit, tgudang jarang berubah
 const stripTelpPrefix = (telp) =>
   (telp || "").replace(/^(wa|WA)\s*:\s*/i, "").trim();
 
-/**
- * Susun teks daftar toko dari baris tgudang.
- * Baris BERURUTAN dengan gdg_inv_kota yang sama dianggap satu grup.
- * Pastikan query pemanggil di-ORDER BY supaya kota yang sama saling
- * bersebelahan (lihat getStoreDirectoryText).
- */
 const buildStoreDirectoryText = (rows) => {
   const groups = [];
   for (const r of rows) {
@@ -36,24 +30,14 @@ const buildStoreDirectoryText = (rows) => {
   }
 
   const blocks = groups.map((g) => {
-    const hasAllNama = g.rows.every(
-      (r) => (r.gdg_inv_nama || "").trim() !== "",
+    const lines = g.rows.map(
+      (r) =>
+        `${(r.gdg_inv_nama || "").trim()} (${stripTelpPrefix(r.gdg_inv_telp)})`,
     );
-    const alamat = (g.rows[0].gdg_inv_alamat || "").trim();
-
-    if (hasAllNama) {
-      const lines = g.rows.map(
-        (r) => `${r.gdg_inv_nama.trim()} (${stripTelpPrefix(r.gdg_inv_telp)})`,
-      );
-      const header = g.rows.length > 1 && g.kota ? `Store ${g.kota}:\n` : "";
-      return `${header}${lines.join("\n")}\n\n${alamat}`;
-    }
-
-    const teleponLines = g.rows
-      .map((r) => (r.gdg_inv_telp || "").trim())
-      .filter(Boolean)
-      .map((t) => ` Wa: ${t}`);
-    return `Store ${g.kota}\n\n ${alamat}\n\n${teleponLines.join("\n")}`;
+    const alamatDasar = (g.rows[0].gdg_inv_alamat || "").trim();
+    const alamat = g.kota ? `${alamatDasar}, ${g.kota}` : alamatDasar;
+    const header = g.kota ? `Store ${g.kota}\n` : "";
+    return `${header}${lines.join("\n")}\n\n${alamat}`;
   });
 
   return `${STATIC_HEADER}${blocks.join("\n\n\n")}\n\n\n${STATIC_FOOTER}`;
