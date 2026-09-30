@@ -49,7 +49,12 @@ const findProductByBarcode = async (req, res) => {
                 d.brgd_kode AS kode,
                 TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
                 d.brgd_ukuran AS ukuran,
-                d.brgd_harga AS harga,
+                COALESCE(
+                    (SELECT hc.hc_harga FROM tbarangdc_harga_cabang hc
+                      WHERE hc.hc_cab = ? AND hc.hc_brg_kode = d.brgd_kode
+                        AND hc.hc_ukuran = d.brgd_ukuran AND hc.hc_aktif = 1 LIMIT 1),
+                    d.brgd_harga
+                ) AS harga,
                 d.brgd_hrg2 AS harga2,
                 d.brgd_hrg3 AS harga3,
                 d.brgd_hrg4 AS harga4,
@@ -65,7 +70,11 @@ const findProductByBarcode = async (req, res) => {
             LEFT JOIN tbarangdc h ON h.brg_kode = d.brgd_kode
             WHERE h.brg_aktif=0 AND h.brg_logstok <> 'N' AND d.brgd_barcode = ?
         `;
-    const [rows] = await pool.query(query, [targetCabang, barcode]);
+    const [rows] = await pool.query(query, [
+      targetCabang,
+      targetCabang,
+      barcode,
+    ]);
 
     if (rows.length === 0)
       return res
@@ -826,7 +835,12 @@ const searchProdukPenjualan = async (req, res) => {
         d.brgd_kode AS kode,
         TRIM(CONCAT(h.brg_jeniskaos, " ", h.brg_tipe, " ", h.brg_lengan, " ", h.brg_jeniskain, " ", h.brg_warna)) AS nama,
         d.brgd_ukuran AS ukuran,
-        d.brgd_harga AS harga,
+        COALESCE(
+          (SELECT hc.hc_harga FROM tbarangdc_harga_cabang hc
+            WHERE hc.hc_cab = ? AND hc.hc_brg_kode = d.brgd_kode
+              AND hc.hc_ukuran = d.brgd_ukuran AND hc.hc_aktif = 1 LIMIT 1),
+          d.brgd_harga
+        ) AS harga,
         h.brg_ktgp AS kategori,
         ${gambarSelect},
         IFNULL((
@@ -850,6 +864,7 @@ const searchProdukPenjualan = async (req, res) => {
     `;
 
     const [rows] = await pool.query(query, [
+      targetCabang,
       targetCabang,
       searchTerm,
       searchTerm,
