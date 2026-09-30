@@ -148,9 +148,7 @@ const savePenjualan = async (req, res) => {
     }
 
     // --- TENTUKAN CABANG TRANSAKSI (MENDUKUNG BAZAAR K01) ---
-    const targetCabang = header.cabang_override
-      ? header.cabang_override
-      : user.cabang;
+    const targetCabang = user.cabang;
 
     // 2. Inisialisasi Nomor dan ID (Gunakan targetCabang)
     const invNomor = await generateNewInvNumber(targetCabang, header.tanggal);
@@ -218,8 +216,8 @@ const savePenjualan = async (req, res) => {
         inv_cus_kode, inv_cus_level, inv_ket, inv_sc,
         inv_disc, inv_bkrm, inv_dp, inv_bayar, inv_pundiamal,
         inv_rptunai, inv_rpcard, inv_nosetor, inv_novoucher, inv_rpvoucher, 
-        inv_kembali, user_create, date_create
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, '', 0, ?, ?, NOW())`;
+        inv_kembali, inv_pro_nomor, user_create, date_create
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, '', 0, ?, ?, ?, NOW())`;
 
     await connection.query(headerSql, [
       idrec,
@@ -238,6 +236,7 @@ const savePenjualan = async (req, res) => {
       totalNonTunai, // inv_rpcard
       nomorSetoran || nomorSetoranQris, // inv_nosetor (Transfer)
       kembalianFinal, // inv_kembali
+      header.nomorPromo || "", // inv_pro_nomor
       user.kode,
     ]);
 
@@ -256,7 +255,7 @@ const savePenjualan = async (req, res) => {
         item.jumlah,
         Number(item.harga),
         0,
-        0,
+        Number(item.diskonPersenPromo || 0),
         Number(item.diskonRp || 0),
         "",
         index + 1,
@@ -810,18 +809,13 @@ const searchProdukPenjualan = async (req, res) => {
     // Filter kategori khusus KF1 — hanya tampilkan brg_ktg = 'KIDDIFY'
     const kategoriFilter = isKiddify ? "AND h.brg_ktg = 'KIDDIFY'" : "";
 
-    // Sumber gambar beda untuk KF1: path tetap /images/cabang/KDC/{kode}.jpg,
-    // bukan dari tbarangdc_images/brg_gambar_url seperti cabang lain
-    const gambarSelect = isKiddify
-      ? `CONCAT('/images/cabang/KDC/', h.brg_kode, '.jpg') AS gambar_url`
-      : `COALESCE(
+    // Semua cabang (termasuk KF1) mengambil gambar dari tbarangdc_images
+    const gambarSelect = `COALESCE(
           (SELECT img_url FROM tbarangdc_images WHERE img_brg_kode = h.brg_kode ORDER BY img_index ASC LIMIT 1),
           h.brg_gambar_url
         ) AS gambar_url`;
 
-    const orderGambarExpr = isKiddify
-      ? `(1=0)` // ekspresi boolean konstan, selalu FALSE — aman dipakai di ORDER BY tanpa dianggap posisi kolom
-      : `(COALESCE(
+    const orderGambarExpr = `(COALESCE(
             (SELECT img_url FROM tbarangdc_images WHERE img_brg_kode = h.brg_kode ORDER BY img_index ASC LIMIT 1),
             h.brg_gambar_url
           ) IS NULL)`;
