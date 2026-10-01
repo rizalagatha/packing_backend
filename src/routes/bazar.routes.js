@@ -68,5 +68,10 @@ router.post(
   authenticateToken,
   bazarController.getBazarPromoDiscounts,
 );
+router.post(
+  "/tukar-barang",
+  authenticateToken,
+  bazarController.tukarBarangBazar,
+);
 
 module.exports = router;

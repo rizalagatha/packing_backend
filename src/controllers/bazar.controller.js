@@ -681,7 +681,11 @@ const normalizeProduct = (r) => ({
 });
 
 const buildCatalogWhere = ({ q, kategori, tipe, jenisKain }) => {
-  const where = ["d.brgd_barcode IS NOT NULL", "TRIM(d.brgd_barcode) <> ''"];
+  const where = [
+    "d.brgd_barcode IS NOT NULL",
+    "TRIM(d.brgd_barcode) <> ''",
+    "h.brg_kode <> 'ADJ-TUKAR'", // kode penyesuaian tukar barang, tidak pernah dijual langsung
+  ];
   const params = [];
 
   const words = String(q || "")
@@ -955,7 +959,8 @@ const getBazarSaleDetail = async (req, res) => {
          h.user_create AS so_user_kasir,
          COALESCE(NULLIF(h.inv_mem_hp, ''), NULLIF(c.cus_telp, ''), '') AS so_hp,
          h.inv_rptunai, h.inv_rpcard, h.inv_rpvoucher,
-         IFNULL(h.inv_kembali, 0) AS so_kembali
+         IFNULL(h.inv_kembali, 0) AS so_kembali,
+         h.inv_klerek,
        FROM tinv_hdr_tmp h
        LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode
        WHERE h.inv_nomor = ? LIMIT 1`,
@@ -1021,6 +1026,7 @@ const getBazarSaleDetail = async (req, res) => {
           so_voucher: voucher,
           so_bayar: cash + card + voucher,
           so_kembali: Number(h.so_kembali) || 0,
+          inv_klerek: String(h.inv_klerek),
         },
         details,
       },
@@ -1124,6 +1130,315 @@ const getBazarPromoDiscounts = async (req, res) => {
   }
 };
 
+// POST /bazar/tukar-barang
+// body: { inv_nomor, barcode_lama, ukuran_lama, barcode_baru, ukuran_baru, qty,
+//         // kalau barang baru lebih mahal dan perlu bayar selisih:
+//         pembayaran_tambahan: { metode, nominal, bank_card, bank_name } (opsional)
+//       }
+const tukarBarangBazar = async (req, res) => {
+  const cabang = req.user?.cabang;
+  const userKode = req.user?.kode || "SYSTEM";
+  const {
+    inv_nomor,
+    barcode_lama,
+    ukuran_lama,
+    barcode_baru,
+    ukuran_baru,
+    qty,
+    pembayaran_tambahan, // { metode, nominal, rek_nomor, rek_nama }
+  } = req.body;
+
+  if (
+    !cabang ||
+    !inv_nomor ||
+    !barcode_lama ||
+    !barcode_baru ||
+    !Number(qty) ||
+    Number(qty) <= 0
+  ) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Data tukar barang tidak lengkap." });
+  }
+  if (!inv_nomor.startsWith(`${cabang}-`)) {
+    return res
+      .status(404)
+      .json({ success: false, message: "Nota tidak ditemukan." });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    // 1. Pastikan nota ada & belum diklerek — GUARD UTAMA, jangan percaya frontend
+    const [[hdr]] = await connection.query(
+      `SELECT inv_nomor, inv_klerek, inv_tanggal,
+              inv_rptunai, inv_rpcard, inv_rpvoucher,
+              inv_nosetor, inv_nocard, inv_namabank, inv_jeniscard
+       FROM tinv_hdr_tmp WHERE inv_nomor = ? LIMIT 1`,
+      [inv_nomor],
+    );
+    if (!hdr) {
+      connection.release();
+      return res
+        .status(404)
+        .json({ success: false, message: "Nota tidak ditemukan." });
+    }
+    if (String(hdr.inv_klerek) !== "0") {
+      connection.release();
+      return res.status(409).json({
+        success: false,
+        code: "ALREADY_KLEREK",
+        message: "Nota sudah diklerek, gunakan proses retur di web.",
+      });
+    }
+
+    // 2. Pastikan barang lama memang ada di nota dengan qty cukup
+    const [[barisLama]] = await connection.query(
+      `SELECT invd_harga, invd_diskon, invd_jumlah, invd_nourut
+       FROM tinv_dtl_tmp
+       WHERE invd_inv_nomor = ? AND invd_kode = ? AND invd_ukuran = ?
+       LIMIT 1`,
+      [inv_nomor, barcode_lama, ukuran_lama || ""],
+    );
+    if (!barisLama || Number(barisLama.invd_jumlah) < Number(qty)) {
+      connection.release();
+      return res.status(400).json({
+        success: false,
+        message:
+          "Barang lama tidak ditemukan atau qty tidak cukup di nota ini.",
+      });
+    }
+
+    // 3. Ambil data barang baru + harga, revalidasi promo
+    const [[barangBaru]] = await connection.query(
+      `${PRODUCT_SELECT} WHERE TRIM(d.brgd_barcode) = ? LIMIT 1`,
+      [barcode_baru],
+    );
+    if (!barangBaru) {
+      connection.release();
+      return res
+        .status(404)
+        .json({ success: false, message: "Barang pengganti tidak ditemukan." });
+    }
+    const hargaBaruAsli =
+      Number(barangBaru.harga_spesial) > 0
+        ? Number(barangBaru.harga_spesial)
+        : Number(barangBaru.harga_jual);
+    const discMap = await resolveItemDiscounts(connection, cabang, [
+      barcode_baru,
+    ]);
+    const diskonBaru = unitDiscount(
+      hargaBaruAsli,
+      discMap[String(barcode_baru).trim().toUpperCase()],
+    );
+    const hargaBaruNetto = hargaBaruAsli - diskonBaru;
+
+    const hargaLamaNetto =
+      Number(barisLama.invd_harga) - Number(barisLama.invd_diskon);
+    const totalLama = hargaLamaNetto * Number(qty);
+    const totalBaru = hargaBaruNetto * Number(qty);
+    const selisih = totalBaru - totalLama; // positif = customer nambah, negatif = tidak dikembalikan
+
+    // 4. Validasi pembayaran tambahan SEBELUM transaksi dibuka
+    let metodeBayar = "";
+    let bayarTambahan = 0;
+    let noCardBaru = "";
+    let namaBankBaru = "";
+    if (selisih > 0) {
+      bayarTambahan = Number(pembayaran_tambahan?.nominal) || 0;
+      if (bayarTambahan < selisih) {
+        connection.release();
+        return res.status(400).json({
+          success: false,
+          code: "KURANG_BAYAR",
+          message: `Barang pengganti lebih mahal ${selisih}. Pembayaran tambahan kurang.`,
+          data: { selisih },
+        });
+      }
+      metodeBayar = pembayaran_tambahan?.metode || "CASH";
+      if (metodeBayar === "CARD") {
+        if (!pembayaran_tambahan?.rek_nomor) {
+          connection.release();
+          return res.status(400).json({
+            success: false,
+            message: "Pilih rekening/mesin EDC untuk pembayaran kartu.",
+          });
+        }
+        noCardBaru = String(pembayaran_tambahan.rek_nomor).slice(0, 20);
+        namaBankBaru = String(pembayaran_tambahan.rek_nama || "").slice(0, 30);
+      }
+    }
+
+    await connection.beginTransaction();
+
+    // 5. Kurangi/hapus baris lama
+    const sisaQtyLama = Number(barisLama.invd_jumlah) - Number(qty);
+    if (sisaQtyLama > 0) {
+      await connection.query(
+        `UPDATE tinv_dtl_tmp SET invd_jumlah = ?
+         WHERE invd_inv_nomor = ? AND invd_kode = ? AND invd_ukuran = ?`,
+        [sisaQtyLama, inv_nomor, barcode_lama, ukuran_lama || ""],
+      );
+    } else {
+      await connection.query(
+        `DELETE FROM tinv_dtl_tmp
+         WHERE invd_inv_nomor = ? AND invd_kode = ? AND invd_ukuran = ?`,
+        [inv_nomor, barcode_lama, ukuran_lama || ""],
+      );
+    }
+
+    // 6. Tambah/gabung baris baru
+    const [[existingBaru]] = await connection.query(
+      `SELECT invd_jumlah FROM tinv_dtl_tmp
+       WHERE invd_inv_nomor = ? AND invd_kode = ? AND invd_ukuran = ?`,
+      [inv_nomor, barangBaru.barcode, barangBaru.ukuran],
+    );
+    const [[{ maxNourut }]] = await connection.query(
+      `SELECT IFNULL(MAX(invd_nourut), 0) AS maxNourut
+       FROM tinv_dtl_tmp WHERE invd_inv_nomor = ?`,
+      [inv_nomor],
+    );
+    if (existingBaru) {
+      await connection.query(
+        `UPDATE tinv_dtl_tmp SET invd_jumlah = invd_jumlah + ?
+         WHERE invd_inv_nomor = ? AND invd_kode = ? AND invd_ukuran = ?`,
+        [Number(qty), inv_nomor, barangBaru.barcode, barangBaru.ukuran],
+      );
+    } else {
+      const invdId = `${inv_nomor.replace(/[^A-Za-z0-9]/g, "")}TKR${Date.now()}`;
+      await connection.query(
+        `INSERT INTO tinv_dtl_tmp (
+          invd_id, invd_idd, invd_inv_nomor, invd_kode, invd_ukuran,
+          invd_jumlah, invd_harga, invd_diskon, invd_nourut
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          invdId,
+          `${invdId}D`,
+          inv_nomor,
+          barangBaru.barcode,
+          barangBaru.ukuran,
+          Number(qty),
+          hargaBaruAsli,
+          diskonBaru,
+          Number(maxNourut) + 1,
+        ],
+      );
+    }
+
+    // 7. Selisih harga
+    let kembalianUntukPembayaranBaru = 0;
+    if (selisih > 0) {
+      kembalianUntukPembayaranBaru = bayarTambahan - selisih;
+      const kolomBayar =
+        metodeBayar === "CARD"
+          ? "inv_rpcard"
+          : metodeBayar === "VOUCHER"
+            ? "inv_rpvoucher"
+            : "inv_rptunai";
+
+      if (metodeBayar === "CARD") {
+        const sudahPernahCard = !!String(hdr.inv_nosetor || "").trim();
+        if (sudahPernahCard) {
+          // Header sudah punya referensi kartu dari pembayaran awal — jangan
+          // ditimpa. Nominal tetap bertambah di inv_rpcard; rekening untuk
+          // top-up ini dicatat di audit log, bukan di header.
+          await connection.query(
+            `UPDATE tinv_hdr_tmp SET inv_rpcard = inv_rpcard + ?,
+               inv_kembali = inv_kembali + ?
+             WHERE inv_nomor = ?`,
+            [selisih, kembalianUntukPembayaranBaru, inv_nomor],
+          );
+        } else {
+          // Pembayaran kartu pertama di nota ini — buat nomor setoran baru
+          const nosetorBaru = await generateNewSetorNomor(
+            connection,
+            hdr.inv_tanggal,
+            cabang,
+          );
+          await connection.query(
+            `UPDATE tinv_hdr_tmp SET inv_rpcard = inv_rpcard + ?,
+               inv_kembali = inv_kembali + ?,
+               inv_nocard = ?, inv_namabank = ?, inv_nosetor = ?, inv_jeniscard = 'D'
+             WHERE inv_nomor = ?`,
+            [
+              selisih,
+              kembalianUntukPembayaranBaru,
+              noCardBaru,
+              namaBankBaru,
+              nosetorBaru,
+              inv_nomor,
+            ],
+          );
+        }
+      } else {
+        await connection.query(
+          `UPDATE tinv_hdr_tmp SET ${kolomBayar} = ${kolomBayar} + ?,
+             inv_kembali = inv_kembali + ?
+           WHERE inv_nomor = ?`,
+          [selisih, kembalianUntukPembayaranBaru, inv_nomor],
+        );
+      }
+    } else if (selisih < 0) {
+      // Barang baru lebih murah, selisih tidak dikembalikan — baris
+      // penyesuaian netto Rp 0 (harga dasar = diskon = |selisih|), supaya
+      // tercetak di struk sebagai keterangan tanpa mengubah so_total.
+      const invdId = `${inv_nomor.replace(/[^A-Za-z0-9]/g, "")}ADJ${Date.now()}`;
+      await connection.query(
+        `INSERT INTO tinv_dtl_tmp (
+          invd_id, invd_idd, invd_inv_nomor, invd_kode, invd_ukuran,
+          invd_jumlah, invd_harga, invd_diskon, invd_nourut
+        ) VALUES (?, ?, ?, 'ADJTUKR1', '-', 1, ?, ?, ?)`,
+        [
+          invdId,
+          `${invdId}D`,
+          inv_nomor,
+          Math.abs(selisih),
+          Math.abs(selisih),
+          Number(maxNourut) + 2,
+        ],
+      );
+    }
+
+    // 8. Audit trail (rekening ikut dicatat di sini, apa pun kondisinya)
+    await connection.query(
+      `INSERT INTO tbazar_tukar_log (
+        inv_nomor, barcode_lama, ukuran_lama, qty_lama, harga_lama,
+        barcode_baru, ukuran_baru, qty_baru, harga_baru, selisih, user_kode,
+        rekening_kode, rekening_nama
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        inv_nomor,
+        barcode_lama,
+        ukuran_lama || "",
+        Number(qty),
+        hargaLamaNetto,
+        barcode_baru,
+        barangBaru.ukuran,
+        Number(qty),
+        hargaBaruNetto,
+        selisih,
+        userKode,
+        metodeBayar === "CARD" ? noCardBaru : "",
+        metodeBayar === "CARD" ? namaBankBaru : "",
+      ],
+    );
+
+    await connection.commit();
+    res.status(200).json({
+      success: true,
+      message: "Tukar barang berhasil.",
+      data: { selisih, kembalian: kembalianUntukPembayaranBaru },
+    });
+  } catch (error) {
+    try {
+      await connection.rollback();
+    } catch (e) {}
+    console.error("Error tukarBarangBazar:", error);
+    res.status(500).json({ success: false, message: "Gagal tukar barang." });
+  } finally {
+    connection.release();
+  }
+};
+
 module.exports = {
   downloadMasterBazar,
   uploadKoreksiBazar,
@@ -1141,4 +1456,5 @@ module.exports = {
   getBazarKoreksiHistory,
   getBazarProductImages,
   getBazarPromoDiscounts,
+  tukarBarangBazar,
 };
