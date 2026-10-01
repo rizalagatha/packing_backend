@@ -960,7 +960,7 @@ const getBazarSaleDetail = async (req, res) => {
          COALESCE(NULLIF(h.inv_mem_hp, ''), NULLIF(c.cus_telp, ''), '') AS so_hp,
          h.inv_rptunai, h.inv_rpcard, h.inv_rpvoucher,
          IFNULL(h.inv_kembali, 0) AS so_kembali,
-         h.inv_klerek,
+         h.inv_klerek
        FROM tinv_hdr_tmp h
        LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode
        WHERE h.inv_nomor = ? LIMIT 1`,
