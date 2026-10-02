@@ -924,7 +924,19 @@ const getBazarSalesHistory = async (req, res) => {
          h.user_create AS so_user_kasir,
          COALESCE(NULLIF(h.inv_mem_hp, ''), NULLIF(c.cus_telp, ''), '') AS so_hp,
          (SELECT IFNULL(SUM(d.invd_jumlah * (d.invd_harga - IFNULL(d.invd_diskon, 0))), 0)
-          FROM tinv_dtl_tmp d WHERE d.invd_inv_nomor = h.inv_nomor) AS so_total
+          FROM tinv_dtl_tmp d WHERE d.invd_inv_nomor = h.inv_nomor) AS so_total,
+         (SELECT IFNULL(SUM(d.invd_jumlah), 0)
+          FROM tinv_dtl_tmp d
+          WHERE d.invd_inv_nomor = h.inv_nomor AND d.invd_kode <> 'ADJTUKR1') AS total_qty,
+         (SELECT COUNT(DISTINCT d.invd_kode)
+          FROM tinv_dtl_tmp d
+          WHERE d.invd_inv_nomor = h.inv_nomor AND d.invd_kode <> 'ADJTUKR1') AS jml_jenis,
+         (SELECT TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna))
+          FROM tinv_dtl_tmp d
+          LEFT JOIN tbarangdc_dtl b ON TRIM(b.brgd_barcode) = d.invd_kode
+          LEFT JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
+          WHERE d.invd_inv_nomor = h.inv_nomor AND d.invd_kode <> 'ADJTUKR1'
+          ORDER BY d.invd_nourut ASC LIMIT 1) AS nama_item_pertama
        FROM tinv_hdr_tmp h
        LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode
        WHERE h.inv_nomor LIKE ? AND h.inv_tanggal BETWEEN ? AND ?
@@ -934,7 +946,12 @@ const getBazarSalesHistory = async (req, res) => {
     );
     res.status(200).json({
       success: true,
-      data: rows.map((r) => ({ ...r, so_total: Number(r.so_total) || 0 })),
+      data: rows.map((r) => ({
+        ...r,
+        so_total: Number(r.so_total) || 0,
+        total_qty: Number(r.total_qty) || 0,
+        jml_jenis: Number(r.jml_jenis) || 0,
+      })),
       hasMore: rows.length === limit,
     });
   } catch (error) {
