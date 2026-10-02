@@ -897,7 +897,7 @@ const getBazarDefaultCustomer = async (req, res) => {
   }
 };
 
-// GET /bazar/history?startDate&endDate  (default 7 hari terakhir)
+// GET /bazar/history?startDate&endDate&offset&limit  (default 7 hari terakhir)
 const getBazarSalesHistory = async (req, res) => {
   const cabang = req.user?.cabang;
   if (!cabang) {
@@ -911,6 +911,8 @@ const getBazarSalesHistory = async (req, res) => {
   const weekAgo = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
   const startDate = req.query.startDate || fmt(weekAgo);
   const endDate = req.query.endDate || fmt(today);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 100);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
   try {
     const [rows] = await pool.query(
@@ -927,16 +929,55 @@ const getBazarSalesHistory = async (req, res) => {
        LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode
        WHERE h.inv_nomor LIKE ? AND h.inv_tanggal BETWEEN ? AND ?
        ORDER BY h.date_create DESC
-       LIMIT 200`,
-      [`${cabang}-%`, startDate, endDate],
+       LIMIT ? OFFSET ?`,
+      [`${cabang}-%`, startDate, endDate, limit, offset],
     );
     res.status(200).json({
       success: true,
       data: rows.map((r) => ({ ...r, so_total: Number(r.so_total) || 0 })),
+      hasMore: rows.length === limit,
     });
   } catch (error) {
     console.error("Error getBazarSalesHistory:", error);
     res.status(500).json({ success: false, message: "Gagal memuat riwayat." });
+  }
+};
+
+// GET /bazar/history/summary?startDate&endDate — total & jumlah nota TANPA limit
+const getBazarSalesSummary = async (req, res) => {
+  const cabang = req.user?.cabang;
+  if (!cabang) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Cabang tidak diketahui." });
+  }
+  const fmt = (d) =>
+    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const today = new Date();
+  const weekAgo = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
+  const startDate = req.query.startDate || fmt(weekAgo);
+  const endDate = req.query.endDate || fmt(today);
+
+  try {
+    const [[row]] = await pool.query(
+      `SELECT
+         COUNT(DISTINCT h.inv_nomor) AS jumlah_nota,
+         IFNULL(SUM(d.invd_jumlah * (d.invd_harga - IFNULL(d.invd_diskon, 0))), 0) AS total_nominal
+       FROM tinv_hdr_tmp h
+       LEFT JOIN tinv_dtl_tmp d ON d.invd_inv_nomor = h.inv_nomor
+       WHERE h.inv_nomor LIKE ? AND h.inv_tanggal BETWEEN ? AND ?`,
+      [`${cabang}-%`, startDate, endDate],
+    );
+    res.status(200).json({
+      success: true,
+      data: {
+        jumlahNota: Number(row.jumlah_nota) || 0,
+        totalNominal: Number(row.total_nominal) || 0,
+      },
+    });
+  } catch (error) {
+    console.error("Error getBazarSalesSummary:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat rekap." });
   }
 };
 
@@ -1452,6 +1493,7 @@ module.exports = {
   searchBazarCustomers,
   getBazarDefaultCustomer,
   getBazarSalesHistory,
+  getBazarSalesSummary,
   getBazarSaleDetail,
   getBazarKoreksiHistory,
   getBazarProductImages,
