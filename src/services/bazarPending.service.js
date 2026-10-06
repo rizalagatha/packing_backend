@@ -11,6 +11,7 @@ const PENDING_SALES_SQL = `
   JOIN tinv_dtl_tmp d ON d.invd_inv_nomor = h.inv_nomor
   JOIN tbarangdc_dtl b ON TRIM(b.brgd_barcode) = d.invd_kode
   WHERE h.inv_nomor LIKE ?
+    AND h.inv_klerek IN ('', '0')
     AND h.inv_tanggal >= '${PENDING_MULAI}'
   GROUP BY b.brgd_kode, b.brgd_ukuran
 `;
