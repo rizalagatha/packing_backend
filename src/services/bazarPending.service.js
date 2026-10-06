@@ -1,3 +1,6 @@
+// Penjualan bazar sebelum tanggal ini tidak ikut mengurangi stok
+const PENDING_MULAI = "2026-01-01";
+
 // Penjualan bazar di tinv_hdr_tmp yang belum diklerek di web.
 // Stok di tmasterstok baru berkurang saat klerek, jadi selama menunggu
 // jumlah ini dikurangkan di layar bazar. Placeholder: pola nomor nota ("B02-%").
@@ -8,7 +11,8 @@ const PENDING_SALES_SQL = `
   JOIN tinv_dtl_tmp d ON d.invd_inv_nomor = h.inv_nomor
   JOIN tbarangdc_dtl b ON TRIM(b.brgd_barcode) = d.invd_kode
   WHERE h.inv_nomor LIKE ?
+    AND h.inv_tanggal >= '${PENDING_MULAI}'
   GROUP BY b.brgd_kode, b.brgd_ukuran
 `;
 
-module.exports = { PENDING_SALES_SQL };
+module.exports = { PENDING_SALES_SQL, PENDING_MULAI };

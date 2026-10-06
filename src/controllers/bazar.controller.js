@@ -792,14 +792,11 @@ const getBazarProduct = async (req, res) => {
        WHERE mst_aktif = 'Y' AND mst_cab = ? AND mst_brg_kode = ? AND mst_ukuran = ?`,
       [cabang, product.kode, product.ukuran],
     );
-    const [[pendRow]] = await pool.query(
-      `SELECT IFNULL(SUM(d.invd_jumlah), 0) AS qty
-       FROM tinv_hdr_tmp h
-       JOIN tinv_dtl_tmp d ON d.invd_inv_nomor = h.inv_nomor
-       WHERE h.inv_nomor LIKE ? AND d.invd_kode = ?`,
-      [`${cabang}-%`, product.barcode],
+    const [pendRows] = await pool.query(
+      `SELECT qty FROM (${PENDING_SALES_SQL}) pn WHERE pn.kode = ? AND pn.ukuran = ? LIMIT 1`,
+      [`${cabang}-%`, product.kode, product.ukuran],
     );
-    const stok = (Number(stokRow.stok) || 0) - (Number(pendRow.qty) || 0);
+    const stok = (Number(stokRow.stok) || 0) - (Number(pendRows[0]?.qty) || 0);
     res.status(200).json({ success: true, data: { ...product, stok } });
   } catch (error) {
     console.error("Error getBazarProduct:", error);
