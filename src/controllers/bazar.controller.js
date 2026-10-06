@@ -1,5 +1,8 @@
 const pool = require("../config/database");
-const { PENDING_SALES_SQL } = require("../services/bazarPending.service");
+const {
+  PENDING_SALES_SQL,
+  PENDING_MULAI,
+} = require("../services/bazarPending.service");
 
 const downloadMasterBazar = async (req, res) => {
   // 1. Ambil parameter cabang dari query string (WAJIB ADA)
@@ -744,6 +747,7 @@ const searchBazarCatalog = async (req, res) => {
          SELECT m.mst_brg_kode, m.mst_ukuran, SUM(m.mst_stok_in - m.mst_stok_out) AS stok
          FROM tmasterstok m
          WHERE m.mst_aktif = 'Y' AND m.mst_cab = ?
+           AND m.mst_tanggal >= '${PENDING_MULAI}'
          GROUP BY m.mst_brg_kode, m.mst_ukuran
        ) s ON s.mst_brg_kode = p.kode AND s.mst_ukuran = p.ukuran
        LEFT JOIN (${PENDING_SALES_SQL}) pn ON pn.kode = p.kode AND pn.ukuran = p.ukuran
@@ -789,7 +793,8 @@ const getBazarProduct = async (req, res) => {
     const [[stokRow]] = await pool.query(
       `SELECT IFNULL(SUM(mst_stok_in - mst_stok_out), 0) AS stok
        FROM tmasterstok
-       WHERE mst_aktif = 'Y' AND mst_cab = ? AND mst_brg_kode = ? AND mst_ukuran = ?`,
+       WHERE mst_aktif = 'Y' AND mst_cab = ? AND mst_brg_kode = ? AND mst_ukuran = ?
+         AND mst_tanggal >= '${PENDING_MULAI}'`,
       [cabang, product.kode, product.ukuran],
     );
     const [pendRows] = await pool.query(
@@ -831,6 +836,7 @@ const getBazarFilterOptions = async (req, res) => {
            SELECT mst_brg_kode, mst_ukuran, SUM(mst_stok_in - mst_stok_out) AS stok
            FROM tmasterstok
            WHERE mst_aktif = 'Y' AND mst_cab = ?
+             AND mst_tanggal >= '${PENDING_MULAI}'
            GROUP BY mst_brg_kode, mst_ukuran
            HAVING stok > 0
          ) s ON s.mst_brg_kode = d.brgd_kode AND s.mst_ukuran = d.brgd_ukuran

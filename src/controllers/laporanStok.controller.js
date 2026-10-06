@@ -1,6 +1,9 @@
 const pool = require("../config/database");
 const { format } = require("date-fns");
-const { PENDING_SALES_SQL } = require("../services/bazarPending.service");
+const {
+  PENDING_SALES_SQL,
+  PENDING_MULAI,
+} = require("../services/bazarPending.service");
 
 /**
  * Melengkapi setiap row hasil getRealTimeStock dengan breakdown
@@ -183,6 +186,12 @@ const getRealTimeStock = async (req, res) => {
     const isBazarGudang =
       !!gudang && String(gudang).toUpperCase().startsWith("B");
 
+    // Gudang bazar: hanya gerakan stok sejak tanggal cutoff yang dihitung
+    const bazarSejakSql =
+      isBazarGudang && jenisStok !== "pesanan"
+        ? `AND m.mst_tanggal >= '${PENDING_MULAI}'`
+        : "";
+
     let pesananCTESql = "";
     let pesananSelectSql = ", 0 AS pesananBooked, 0 AS pesananReady";
     let pesananJoinSql = "";
@@ -346,7 +355,7 @@ const getRealTimeStock = async (req, res) => {
     LEFT JOIN (
         SELECT m.mst_brg_kode, m.mst_ukuran, SUM(m.mst_stok_in - m.mst_stok_out) as stok
         FROM ${stockSourceTable} m
-        WHERE m.mst_aktif = 'Y' AND m.mst_tanggal <= ? AND ${gudangFilter}
+        WHERE m.mst_aktif = 'Y' AND m.mst_tanggal <= ? ${bazarSejakSql} AND ${gudangFilter}
         GROUP BY m.mst_brg_kode, m.mst_ukuran
     ) s ON a.brg_kode = s.mst_brg_kode
     WHERE a.brg_aktif = 0 AND a.brg_logstok = 'Y' ${searchFilter} ${jenisKainFilter}
