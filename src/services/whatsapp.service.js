@@ -10,6 +10,54 @@ const fs = require("fs");
 const path = require("path");
 const pool = require("../config/database");
 
+function randomDelay(minMs, maxMs) {
+  const ms = Math.floor(minMs + Math.random() * (maxMs - minMs));
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const GREETINGS = [
+  "Kak, ini struknya ya. Makasih udah mampir di Kaosan 🙏",
+  "Struk belanjanya kak, makasih ya",
+  "Halo kak, ini struk tadi. Semoga suka sama belanjaannya",
+  "Ini struknya kak. Ditunggu belanja lagi ya",
+  "Makasih ya kak udah belanja tadi. Struknya di sini",
+  "Hai kak, struknya kami kirim di sini ya",
+  "Struk belanja kakak ya. Makasih banyak 😊",
+  "Kak, ini bukti belanjanya ya. Makasih udah mampir",
+  "Makasih kak! Ini struknya, simpan ya kalau nanti perlu tukar",
+  "Halo kak, struknya ya. Kalau ada yang kurang pas, kabari aja",
+  "Ini struk belanjanya kak, makasih udah mampir ke stand kami",
+  "Struknya kak. Sehat selalu dan makasih ya",
+];
+
+function varyCaption(caption) {
+  const greet = GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
+  return `${greet}\n\n${caption || ""}`.trim();
+}
+
+// --- ANTI-DETEKSI: batas harian, jeda acak, istirahat ---
+const DAILY_LIMIT = 50; // naikkan bertahap kalau nomor sudah "matang"
+const REST_EVERY = 10; // istirahat panjang tiap N pesan
+const REST_MIN_MS = 60000;
+const REST_MAX_MS = 120000;
+const GAP_MIN_MS = 6000;
+const GAP_MAX_MS = 15000;
+
+const sendStats = {}; // uniqueId -> { date, count }
+const sinceRest = {}; // uniqueId -> jumlah kiriman sejak istirahat terakhir
+
+// Tanggal WIB (UTC+7) supaya hitungan harian ganti hari tepat tengah malam
+const todayWib = () =>
+  new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+
+const getDailyCount = (uniqueId) => {
+  const today = todayWib();
+  if (!sendStats[uniqueId] || sendStats[uniqueId].date !== today) {
+    sendStats[uniqueId] = { date: today, count: 0 };
+  }
+  return sendStats[uniqueId].count;
+};
+
 // --- KONFIGURASI SESI ---
 // Simpan di luar folder project agar aman dari PM2
 const SESSION_DIR = "/var/www/wa_sessions_baileys";
@@ -40,8 +88,6 @@ const sendQueues = {}; // uniqueId -> ekor antrean
 const pendingCount = {}; // uniqueId -> jumlah kiriman menunggu
 const lastSentAt = {}; // uniqueId -> waktu kirim terakhir
 const connectedSince = {}; // uniqueId -> waktu socket terhubung
-const MIN_GAP_MS = 4000; // jeda minimum antar pesan pada 1 nomor
-const GAP_JITTER_MS = 1500; // acak tambahan supaya tidak seperti robot
 const MAX_QUEUE = 8; // lebih dari ini ditolak, jangan menumpuk
 
 /**
@@ -264,11 +310,24 @@ const normalizeNumber = (number) => {
 const enqueueSend = (uniqueId, job) => {
   const previous = sendQueues[uniqueId] || Promise.resolve();
   const run = previous.then(async () => {
-    const gap = MIN_GAP_MS + Math.floor(Math.random() * GAP_JITTER_MS);
-    const wait = gap - (Date.now() - (lastSentAt[uniqueId] || 0));
-    if (wait > 0) {
-      await new Promise((resolve) => setTimeout(resolve, wait));
+    const idleMs = Date.now() - (lastSentAt[uniqueId] || 0);
+
+    // Kalau sudah lama menganggur, hitungan istirahat mulai dari nol
+    if (idleMs > 5 * 60 * 1000) {
+      sinceRest[uniqueId] = 0;
     }
+
+    if ((sinceRest[uniqueId] || 0) >= REST_EVERY) {
+      sinceRest[uniqueId] = 0;
+      await randomDelay(REST_MIN_MS, REST_MAX_MS);
+    } else {
+      const gap = GAP_MIN_MS + Math.random() * (GAP_MAX_MS - GAP_MIN_MS);
+      const wait = gap - idleMs;
+      if (wait > 0) {
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+    }
+
     try {
       return await job();
     } finally {
@@ -327,6 +386,12 @@ const deliver = async ({
       error: "Antrean pengiriman penuh, coba lagi sebentar.",
     };
   }
+  if (getDailyCount(uniqueId) + (pendingCount[uniqueId] || 0) >= DAILY_LIMIT) {
+    return {
+      success: false,
+      error: `Batas kirim WA hari ini (${DAILY_LIMIT} struk) sudah tercapai. Coba lagi besok.`,
+    };
+  }
   pendingCount[uniqueId] = (pendingCount[uniqueId] || 0) + 1;
 
   const result = await enqueueSend(uniqueId, async () => {
@@ -347,6 +412,9 @@ const deliver = async ({
         };
       }
       await sock.sendMessage(jid, buildContent());
+      getDailyCount(uniqueId);
+      sendStats[uniqueId].count += 1;
+      sinceRest[uniqueId] = (sinceRest[uniqueId] || 0) + 1;
       return { success: true };
     } catch (error) {
       console.error("[BAILEYS SEND ERROR]", error);
@@ -383,7 +451,7 @@ const sendImageFromClient = (
     jenis: "IMAGE",
     caption,
     meta,
-    buildContent: () => ({ image: fileBuffer, caption }),
+    buildContent: () => ({ image: fileBuffer, caption: varyCaption(caption) }),
   });
 
 /**
