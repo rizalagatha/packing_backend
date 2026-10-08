@@ -36,7 +36,7 @@ function varyCaption(caption) {
 }
 
 // --- ANTI-DETEKSI: batas harian, jeda acak, istirahat ---
-const DAILY_LIMIT = 50; // naikkan bertahap kalau nomor sudah "matang"
+const DAILY_LIMIT = 100; // naikkan bertahap kalau nomor sudah "matang"
 const REST_EVERY = 10; // istirahat panjang tiap N pesan
 const REST_MIN_MS = 60000;
 const REST_MAX_MS = 120000;
