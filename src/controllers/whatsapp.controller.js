@@ -7,6 +7,7 @@ const WA_ADMINS = (process.env.WA_BAZAR_ADMINS || "")
   .filter(Boolean);
 
 const FORBIDDEN_MSG = "Hanya admin yang boleh menautkan atau memutus WA bazar.";
+const getSlot = (req) => req.query.slot;
 
 // Sesi cabang biasa: perilaku lama. Sesi bersama bazar: hanya admin.
 const canManageSession = (user) => {
@@ -22,16 +23,17 @@ const getQrCode = async (req, res) => {
       `[WA] /qr diminta oleh ${req.user.kode} (cabang ${req.user.cabang})`,
     );
     const storeCode = req.user.cabang;
+    const slot = getSlot(req);
 
     if (!canManageSession(req.user)) {
-      const info = await whatsappService.getSessionInfo(storeCode);
+      const info = await whatsappService.getSessionInfo(storeCode, slot);
       if (info.status === "CONNECTED") {
         return res.status(200).json({ success: true, data: { qr: null } });
       }
       return res.status(403).json({ success: false, message: FORBIDDEN_MSG });
     }
 
-    const qr = await whatsappService.createClient(storeCode);
+    const qr = await whatsappService.createClient(storeCode, slot);
     res.status(200).json({ success: true, data: { qr } });
   } catch (error) {
     console.error("[WA] getQrCode gagal:", error.message);
@@ -51,7 +53,7 @@ const logout = async (req, res) => {
       return res.status(403).json({ success: false, message: FORBIDDEN_MSG });
     }
     const storeCode = req.user.cabang;
-    await whatsappService.deleteSession(storeCode);
+    await whatsappService.deleteSession(storeCode, getSlot(req));
     res
       .status(200)
       .json({ success: true, message: "Sesi WhatsApp berhasil dihapus." });
@@ -63,7 +65,10 @@ const logout = async (req, res) => {
 const getSessionStatus = async (req, res) => {
   try {
     const storeCode = req.user.cabang;
-    const sessionData = await whatsappService.getSessionInfo(storeCode);
+    const sessionData = await whatsappService.getSessionInfo(
+      storeCode,
+      getSlot(req),
+    );
     res.status(200).json({ success: true, data: sessionData });
   } catch (error) {
     console.error("Error getting session status:", error);
@@ -79,7 +84,10 @@ const getSendLog = async (req, res) => {
       Math.max(parseInt(req.query.limit, 10) || 100, 1),
       300,
     );
-    const sessionKey = whatsappService.getUniqueId(req.user.cabang);
+    const sessionKey = whatsappService.getUniqueId(
+      req.user.cabang,
+      getSlot(req),
+    );
     const [rows] = await pool.query(
       `SELECT id, cabang, user_kode, target, jenis, caption, status, error_msg, created_at
        FROM twa_send_log
@@ -99,7 +107,10 @@ const getSendLog = async (req, res) => {
 
 const getSessionActivity = async (req, res) => {
   try {
-    const sessionKey = whatsappService.getUniqueId(req.user.cabang);
+    const sessionKey = whatsappService.getUniqueId(
+      req.user.cabang,
+      getSlot(req),
+    );
     const [rows] = await pool.query(
       `SELECT user_kode, cabang, COUNT(*) AS total,
               SUM(status = 'OK') AS ok, MAX(created_at) AS last_at

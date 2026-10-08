@@ -72,15 +72,17 @@ const clients = {};
 const qrStore = {};
 
 // --- SESI BERSAMA BAZAR ---
-// Semua cabang berawalan "B" memakai satu sesi WA bersama bernama BAZAR.
-// Tambahkan pengecualian di sini kalau ada cabang B yang perlu nomor sendiri.
-const SHARED_BAZAR_KEY = "BAZAR";
+// Semua cabang berawalan "B" memakai pool nomor WA bersama (2 slot).
+const SHARED_SLOTS = ["BAZAR", "BAZAR2"];
+const SHARED_BAZAR_KEY = SHARED_SLOTS[0];
 const isBazarBranch = (code) =>
   String(code || "")
     .toUpperCase()
     .startsWith("B");
-const getSessionName = (storeCode) =>
-  isBazarBranch(storeCode) ? SHARED_BAZAR_KEY : storeCode;
+const normalizeSlot = (slot) =>
+  SHARED_SLOTS.includes(slot) ? slot : SHARED_SLOTS[0];
+const getSessionName = (storeCode, slot) =>
+  isBazarBranch(storeCode) ? normalizeSlot(slot) : storeCode;
 
 // --- ANTREAN KIRIM ---
 const connecting = {}; // uniqueId -> Promise (socket sedang dibuat)
@@ -93,8 +95,8 @@ const MAX_QUEUE = 8; // lebih dari ini ditolak, jangan menumpuk
 /**
  * HELPER: ID Unik untuk Prod vs Trial
  */
-const getUniqueId = (storeCode) => {
-  const base = getSessionName(storeCode);
+const getUniqueId = (storeCode, slot) => {
+  const base = getSessionName(storeCode, slot);
   const appName = process.env.name || "";
   const appPort = process.env.PORT || "";
   if (appName.includes("trial") || appPort == "3002") {
@@ -109,8 +111,8 @@ const getUniqueId = (storeCode) => {
 /**
  * Mendapatkan Status Sesi
  */
-const getSessionInfo = async (storeCode) => {
-  const uniqueId = getUniqueId(storeCode);
+const getSessionInfo = async (storeCode, slot) => {
+  const uniqueId = getUniqueId(storeCode, slot);
   const sock = clients[uniqueId];
   const shared = isBazarBranch(storeCode);
 
@@ -135,7 +137,7 @@ const getSessionInfo = async (storeCode) => {
 
 const QR_WAIT_MS = 25000;
 
-const startSocket = async (storeCode, uniqueId) => {
+const startSocket = async (storeCode, uniqueId, slot) => {
   const sessionPath = path.join(SESSION_DIR, uniqueId);
   console.log(`[BAILEYS] Memulai sesi untuk: ${uniqueId}`);
 
@@ -229,7 +231,7 @@ const startSocket = async (storeCode, uniqueId) => {
           console.warn(`[BAILEYS] ${uniqueId} digantikan koneksi lain.`);
         } else {
           setTimeout(() => {
-            createClient(storeCode).catch((err) =>
+            createClient(storeCode, slot).catch((err) =>
               console.error(
                 `[BAILEYS] Reconnect ${uniqueId} gagal:`,
                 err.message,
@@ -252,8 +254,8 @@ const startSocket = async (storeCode, uniqueId) => {
  * Mengembalikan string QR kalau perlu scan, atau null kalau sudah terhubung.
  * Aman dipanggil berkali-kali: tidak akan membuat socket ganda.
  */
-const createClient = (storeCode) => {
-  const uniqueId = getUniqueId(storeCode);
+const createClient = (storeCode, slot) => {
+  const uniqueId = getUniqueId(storeCode, slot);
 
   if (clients[uniqueId]?.user) {
     return Promise.resolve(null);
@@ -266,7 +268,7 @@ const createClient = (storeCode) => {
     return Promise.resolve(qrStore[uniqueId] || null);
   }
 
-  connecting[uniqueId] = startSocket(storeCode, uniqueId).finally(() => {
+  connecting[uniqueId] = startSocket(storeCode, uniqueId, slot).finally(() => {
     delete connecting[uniqueId];
   });
   return connecting[uniqueId];
@@ -281,23 +283,25 @@ const restoreSharedSessions = async () => {
     console.log("[BAILEYS] Restore sesi dilewati (bukan production).");
     return;
   }
-  const uniqueId = getUniqueId(SHARED_BAZAR_KEY);
-  const credsFile = path.join(SESSION_DIR, uniqueId, "creds.json");
-  if (!fs.existsSync(credsFile)) {
-    console.log(
-      `[BAILEYS] ${uniqueId} belum pernah ditautkan, restore dilewati.`,
-    );
-    return;
-  }
-  try {
-    const qr = await createClient(SHARED_BAZAR_KEY);
-    console.log(
-      qr
-        ? `[BAILEYS] ${uniqueId} butuh scan ulang.`
-        : `[BAILEYS] ${uniqueId} dipulihkan.`,
-    );
-  } catch (e) {
-    console.error(`[BAILEYS] Restore ${uniqueId} gagal:`, e.message);
+  for (const slot of SHARED_SLOTS) {
+    const uniqueId = getUniqueId(SHARED_BAZAR_KEY, slot);
+    const credsFile = path.join(SESSION_DIR, uniqueId, "creds.json");
+    if (!fs.existsSync(credsFile)) {
+      console.log(
+        `[BAILEYS] ${uniqueId} belum pernah ditautkan, restore dilewati.`,
+      );
+      continue;
+    }
+    try {
+      const qr = await createClient(SHARED_BAZAR_KEY, slot);
+      console.log(
+        qr
+          ? `[BAILEYS] ${uniqueId} butuh scan ulang.`
+          : `[BAILEYS] ${uniqueId} dipulihkan.`,
+      );
+    } catch (e) {
+      console.error(`[BAILEYS] Restore ${uniqueId} gagal:`, e.message);
+    }
   }
 };
 
@@ -368,6 +372,50 @@ const logSend = async ({
   }
 };
 
+let rrCursor = 0;
+
+// Pilih nomor pengirim: yang tersambung, belum kena batas harian,
+// dengan beban paling sedikit. Seri -> bergantian.
+const pickSender = (storeCode) => {
+  const ids = isBazarBranch(storeCode)
+    ? SHARED_SLOTS.map((s) => getUniqueId(storeCode, s))
+    : [getUniqueId(storeCode)];
+
+  const live = ids.filter((id) => clients[id]?.user);
+  if (live.length === 0) {
+    return {
+      error: "WA belum terhubung. Hubungi admin untuk menautkan ulang.",
+    };
+  }
+
+  const underLimit = live.filter(
+    (id) => getDailyCount(id) + (pendingCount[id] || 0) < DAILY_LIMIT,
+  );
+  if (underLimit.length === 0) {
+    return {
+      error: `Batas kirim WA hari ini (${DAILY_LIMIT} struk per nomor) sudah tercapai. Coba lagi besok.`,
+    };
+  }
+
+  const open = underLimit.filter((id) => (pendingCount[id] || 0) < MAX_QUEUE);
+  if (open.length === 0) {
+    return { error: "Antrean pengiriman penuh, coba lagi sebentar." };
+  }
+
+  rrCursor += 1;
+  let best = null;
+  let bestLoad = Infinity;
+  for (let i = 0; i < open.length; i += 1) {
+    const id = open[(rrCursor + i) % open.length];
+    const load = getDailyCount(id) + (pendingCount[id] || 0);
+    if (load < bestLoad) {
+      best = id;
+      bestLoad = load;
+    }
+  }
+  return { uniqueId: best };
+};
+
 const deliver = async ({
   storeCode,
   number,
@@ -376,22 +424,15 @@ const deliver = async ({
   meta,
   buildContent,
 }) => {
-  const uniqueId = getUniqueId(storeCode);
   const id = normalizeNumber(number);
   const jid = id + "@s.whatsapp.net";
 
-  if ((pendingCount[uniqueId] || 0) >= MAX_QUEUE) {
-    return {
-      success: false,
-      error: "Antrean pengiriman penuh, coba lagi sebentar.",
-    };
+  const picked = pickSender(storeCode);
+  if (picked.error) {
+    return { success: false, error: picked.error };
   }
-  if (getDailyCount(uniqueId) + (pendingCount[uniqueId] || 0) >= DAILY_LIMIT) {
-    return {
-      success: false,
-      error: `Batas kirim WA hari ini (${DAILY_LIMIT} struk) sudah tercapai. Coba lagi besok.`,
-    };
-  }
+  const uniqueId = picked.uniqueId;
+
   pendingCount[uniqueId] = (pendingCount[uniqueId] || 0) + 1;
 
   const result = await enqueueSend(uniqueId, async () => {
@@ -457,8 +498,8 @@ const sendImageFromClient = (
 /**
  * Hapus Sesi
  */
-const deleteSession = async (storeCode) => {
-  const uniqueId = getUniqueId(storeCode);
+const deleteSession = async (storeCode, slot) => {
+  const uniqueId = getUniqueId(storeCode, slot);
   const sock = clients[uniqueId];
   const sessionPath = path.join(SESSION_DIR, uniqueId);
 
