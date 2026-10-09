@@ -943,6 +943,10 @@ const getBazarSalesHistory = async (req, res) => {
          h.inv_cus_kode AS so_customer,
          IFNULL(c.cus_nama, '') AS cus_nama,
          h.user_create AS so_user_kasir,
+         IFNULL(h.inv_rptunai, 0) AS inv_rptunai,
+         IFNULL(h.inv_rpcard, 0) AS inv_rpcard,
+         IFNULL(h.inv_rpvoucher, 0) AS inv_rpvoucher,
+         IFNULL(h.inv_kembali, 0) AS inv_kembali,
          COALESCE(NULLIF(h.inv_mem_hp, ''), NULLIF(c.cus_telp, ''), '') AS so_hp,
          (SELECT IFNULL(SUM(d.invd_jumlah * (d.invd_harga - IFNULL(d.invd_diskon, 0))), 0)
           FROM tinv_dtl_tmp d WHERE d.invd_inv_nomor = h.inv_nomor) AS so_total,
@@ -972,6 +976,9 @@ const getBazarSalesHistory = async (req, res) => {
         so_total: Number(r.so_total) || 0,
         total_qty: Number(r.total_qty) || 0,
         jml_jenis: Number(r.jml_jenis) || 0,
+        pay_cash: (Number(r.inv_rptunai) || 0) - (Number(r.inv_kembali) || 0),
+        pay_transfer: Number(r.inv_rpcard) || 0,
+        pay_voucher: Number(r.inv_rpvoucher) || 0,
       })),
       hasMore: rows.length === limit,
     });
