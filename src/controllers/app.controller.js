@@ -9,7 +9,7 @@ const getAppVersion = async (req, res) => {
       apkUrl: "http://103.94.238.252:3000/public/updates/app-release.apk",
       forceUpdate: false,
       // Ubah dari string tunggal menjadi Array
-      releaseNotes: ["Sekarang bisa Tautkan 2 Nomor WA untuk satu cabang"],
+      releaseNotes: ["Metode pembayaran ditampilkan untuk invoice bazar"],
     };
     res.status(200).json({ success: true, data: appInfo });
   } catch (error) {
