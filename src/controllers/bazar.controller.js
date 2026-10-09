@@ -95,35 +95,53 @@ const uploadKoreksiBazar = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    // 1. Simpan Header (tkor_hdr)
-    const qHdr = `
-      INSERT INTO tkor_hdr 
-      (korh_nomor, korh_tanggal, korh_notes, korh_gdg_kode, korh_total, date_create, user_create)
-      VALUES (?, ?, ?, ?, ?, NOW(), ?)
-    `;
-    await connection.query(qHdr, [
-      header.no_koreksi,
-      header.tanggal,
-      "KOREKSI ANDROID BAZAR",
-      targetCabang,
-      header.total_nilai || 0,
-      header.operator || "ADMIN",
-    ]);
+    const user = String(header.operator || "ADMIN").slice(0, 10);
+    const idrec = `${targetCabang}KOR${Date.now()}`.slice(0, 30);
 
-    // 2. Simpan Detail (tkor_dtl)
-    const qDtl = `
-      INSERT INTO tkor_dtl 
-      (kord_korh_nomor, kord_brg_kode, kord_qty, kord_stok)
-      VALUES (?, ?, ?, ?)
-    `;
-
-    for (const item of details) {
-      await connection.query(qDtl, [
+    // 1. Header (tkor_hdr)
+    await connection.query(
+      `INSERT INTO tkor_hdr
+         (kor_idrec, kor_nomor, kor_tanggal, kor_ket, kor_cab, user_create, date_create)
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        idrec,
         header.no_koreksi,
-        item.barcode,
-        item.selisih, // Nilai selisih (bisa plus atau minus)
-        item.qty_sistem,
-      ]);
+        header.tanggal,
+        "KOREKSI ANDROID BAZAR",
+        targetCabang,
+        user,
+      ],
+    );
+
+    // 2. Detail (tkor_dtl): tabel ini menyimpan kode + ukuran, bukan barcode
+    for (let i = 0; i < details.length; i++) {
+      const item = details[i];
+      const [[brg]] = await connection.query(
+        `SELECT brgd_kode, brgd_ukuran FROM tbarangdc_dtl
+         WHERE TRIM(brgd_barcode) = ? LIMIT 1`,
+        [String(item.barcode).trim()],
+      );
+      if (!brg) {
+        throw new Error(`Barcode ${item.barcode} tidak ditemukan.`);
+      }
+      const stok = Number(item.qty_sistem) || 0;
+      const selisih = Number(item.selisih) || 0;
+
+      await connection.query(
+        `INSERT INTO tkor_dtl
+           (kord_idrec, kord_kor_nomor, kord_kode, kord_ukuran,
+            kord_stok, kord_jumlah, kord_selisih)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          `${idrec}${String(i + 1).padStart(3, "0")}`.slice(0, 30),
+          header.no_koreksi,
+          brg.brgd_kode,
+          brg.brgd_ukuran,
+          stok,
+          stok + selisih, // qty fisik
+          selisih,
+        ],
+      );
     }
 
     await connection.commit();
@@ -1102,28 +1120,28 @@ const getBazarSaleDetail = async (req, res) => {
 
 // GET /bazar/koreksi/history
 const getBazarKoreksiHistory = async (req, res) => {
-  const cabang = req.user?.cabang;
   try {
     const [rows] = await pool.query(
       `SELECT
-        h.kor_nomor AS nomor,
-        h.kor_tanggal AS tanggal,
-        h.date_create AS dibuat,
-        h.user_create AS user_kode,
-        d.kord_kode AS kode,
-        d.kord_ukuran AS ukuran,
-        b.brgd_barcode AS barcode,
-        TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna)) AS nama,
-        d.kord_stok AS qty_sistem,
-        d.kord_selisih AS selisih,
-        d.kord_jumlah AS qty_fisik
-      FROM tkor_hdr h
-      JOIN tkor_dtl d ON d.kord_kor_nomor = h.kor_nomor
-      LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = d.kord_kode AND b.brgd_ukuran = d.kord_ukuran
-      LEFT JOIN tbarangdc a ON a.brg_kode = d.kord_kode
-      WHERE h.kor_cab = ? AND h.kor_ket = 'KOREKSI ANDROID BAZAR'
-      ORDER BY h.date_create DESC, d.kord_kode ASC, d.kord_ukuran ASC
-      LIMIT 50`[cabang],
+         h.kor_nomor AS nomor,
+         h.kor_tanggal AS tanggal,
+         h.date_create AS dibuat,
+         h.user_create AS user_kode,
+         d.kord_kode AS kode,
+         d.kord_ukuran AS ukuran,
+         b.brgd_barcode AS barcode,
+         TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna)) AS nama,
+         d.kord_stok AS qty_sistem,
+         d.kord_selisih AS selisih,
+         d.kord_jumlah AS qty_fisik
+       FROM tkor_hdr h
+       JOIN tkor_dtl d ON d.kord_kor_nomor = h.kor_nomor
+       LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = d.kord_kode AND b.brgd_ukuran = d.kord_ukuran
+       LEFT JOIN tbarangdc a ON a.brg_kode = d.kord_kode
+       WHERE h.kor_cab = ? AND h.kor_ket = 'KOREKSI ANDROID BAZAR'
+       ORDER BY h.date_create DESC, d.kord_kode ASC, d.kord_ukuran ASC
+       LIMIT 50`,
+      [req.user.cabang],
     );
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
@@ -1172,11 +1190,6 @@ const getBazarProductImages = async (req, res) => {
 
 // POST /bazar/promo-discounts  { barcodes: [...] }
 const getBazarPromoDiscounts = async (req, res) => {
-  console.log(
-    "[promo-discounts]",
-    req.user?.cabang,
-    req.body?.barcodes?.length,
-  );
   const cabang = req.user?.cabang;
   const barcodes = req.body?.barcodes;
   if (!cabang || !Array.isArray(barcodes) || barcodes.length > 100) {
