@@ -1006,11 +1006,27 @@ const getBazarSalesSummary = async (req, res) => {
        WHERE h.inv_nomor LIKE ? AND h.inv_tanggal BETWEEN ? AND ?`,
       [`${cabang}-%`, startDate, endDate],
     );
+
+    // Rincian metode bayar: query header saja (jangan di-join ke detail)
+    // Tunai dikurangi kembalian supaya yang tampil adalah uang tunai bersih
+    const [[pay]] = await pool.query(
+      `SELECT
+         IFNULL(SUM(inv_rptunai - IFNULL(inv_kembali, 0)), 0) AS cash,
+         IFNULL(SUM(inv_rpcard), 0) AS transfer,
+         IFNULL(SUM(inv_rpvoucher), 0) AS voucher
+       FROM tinv_hdr_tmp
+       WHERE inv_nomor LIKE ? AND inv_tanggal BETWEEN ? AND ?`,
+      [`${cabang}-%`, startDate, endDate],
+    );
+
     res.status(200).json({
       success: true,
       data: {
         jumlahNota: Number(row.jumlah_nota) || 0,
         totalNominal: Number(row.total_nominal) || 0,
+        cash: Number(pay.cash) || 0,
+        transfer: Number(pay.transfer) || 0,
+        voucher: Number(pay.voucher) || 0,
       },
     });
   } catch (error) {
