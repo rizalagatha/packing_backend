@@ -84,17 +84,14 @@ const getSendLog = async (req, res) => {
       Math.max(parseInt(req.query.limit, 10) || 100, 1),
       300,
     );
-    const sessionKey = whatsappService.getUniqueId(
-      req.user.cabang,
-      getSlot(req),
-    );
+    const sessionKeys = whatsappService.getAllUniqueIds(req.user.cabang);
     const [rows] = await pool.query(
-      `SELECT id, cabang, user_kode, target, jenis, caption, status, error_msg, created_at
+      `SELECT id, session_key, cabang, user_kode, target, jenis, caption, status, error_msg, created_at
        FROM twa_send_log
-       WHERE session_key = ?
+       WHERE session_key IN (?)
        ORDER BY id DESC
        LIMIT ?`,
-      [sessionKey, limit],
+      [sessionKeys, limit],
     );
     res.status(200).json({ success: true, data: rows });
   } catch (error) {

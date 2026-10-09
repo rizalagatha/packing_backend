@@ -530,6 +530,11 @@ const deleteSession = async (storeCode, slot) => {
   return { success: true };
 };
 
+const getAllUniqueIds = (storeCode) =>
+  isBazarBranch(storeCode)
+    ? SHARED_SLOTS.map((s) => getUniqueId(storeCode, s))
+    : [getUniqueId(storeCode)];
+
 module.exports = {
   createClient,
   sendMessageFromClient,
@@ -539,4 +544,5 @@ module.exports = {
   getUniqueId,
   isSharedBranch: isBazarBranch,
   restoreSharedSessions,
+  getAllUniqueIds,
 };
