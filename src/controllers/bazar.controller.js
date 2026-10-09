@@ -1106,22 +1106,24 @@ const getBazarKoreksiHistory = async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT
-         h.korh_nomor AS no_koreksi,
-         h.korh_tanggal AS tanggal,
-         h.user_create AS operator,
-         d.kord_brg_kode AS barcode,
-         ${namaExpr("a")} AS nama,
-         d.kord_stok AS qty_sistem,
-         d.kord_qty AS selisih,
-         (d.kord_stok + d.kord_qty) AS qty_fisik
-       FROM tkor_hdr h
-       JOIN tkor_dtl d ON d.kord_korh_nomor = h.korh_nomor
-       LEFT JOIN tbarangdc_dtl b ON TRIM(b.brgd_barcode) = d.kord_brg_kode
-       LEFT JOIN tbarangdc a ON a.brg_kode = b.brgd_kode
-       WHERE h.korh_gdg_kode = ? AND h.korh_notes = 'KOREKSI ANDROID BAZAR'
-       ORDER BY h.date_create DESC, d.kord_brg_kode ASC
-       LIMIT 50`,
-      [cabang],
+        h.kor_nomor AS nomor,
+        h.kor_tanggal AS tanggal,
+        h.date_create AS dibuat,
+        h.user_create AS user_kode,
+        d.kord_kode AS kode,
+        d.kord_ukuran AS ukuran,
+        b.brgd_barcode AS barcode,
+        TRIM(CONCAT_WS(' ', a.brg_jeniskaos, a.brg_tipe, a.brg_lengan, a.brg_jeniskain, a.brg_warna)) AS nama,
+        d.kord_stok AS qty_sistem,
+        d.kord_selisih AS selisih,
+        d.kord_jumlah AS qty_fisik
+      FROM tkor_hdr h
+      JOIN tkor_dtl d ON d.kord_kor_nomor = h.kor_nomor
+      LEFT JOIN tbarangdc_dtl b ON b.brgd_kode = d.kord_kode AND b.brgd_ukuran = d.kord_ukuran
+      LEFT JOIN tbarangdc a ON a.brg_kode = d.kord_kode
+      WHERE h.kor_cab = ? AND h.kor_ket = 'KOREKSI ANDROID BAZAR'
+      ORDER BY h.date_create DESC, d.kord_kode ASC, d.kord_ukuran ASC
+      LIMIT 50`[cabang],
     );
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
