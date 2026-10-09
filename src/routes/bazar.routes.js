@@ -50,6 +50,11 @@ router.get(
   authenticateToken,
   bazarController.getBazarSalesSummary,
 );
+router.get(
+  "/history/kasir",
+  authenticateToken,
+  bazarController.getBazarHistoryKasir,
+);
 router.get("/history", authenticateToken, bazarController.getBazarSalesHistory);
 router.get(
   "/history/:nomor",

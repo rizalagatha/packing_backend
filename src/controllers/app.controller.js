@@ -5,11 +5,11 @@ const getAppVersion = async (req, res) => {
   try {
     const appInfo = {
       latestVersion: packageJson.version, // Ambil otomatis dari package.json
-      versionCode: 81, // Update angka ini setiap rilis baru di backend
+      versionCode: 82, // Update angka ini setiap rilis baru di backend
       apkUrl: "http://103.94.238.252:3000/public/updates/app-release.apk",
       forceUpdate: false,
       // Ubah dari string tunggal menjadi Array
-      releaseNotes: ["Metode pembayaran ditampilkan untuk invoice bazar"],
+      releaseNotes: ["Filter by kasir"],
     };
     res.status(200).json({ success: true, data: appInfo });
   } catch (error) {

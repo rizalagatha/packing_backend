@@ -934,6 +934,7 @@ const getBazarSalesHistory = async (req, res) => {
   const endDate = req.query.endDate || fmt(today);
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 100);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  const kasir = String(req.query.kasir || "").trim();
 
   try {
     const [rows] = await pool.query(
@@ -965,9 +966,10 @@ const getBazarSalesHistory = async (req, res) => {
        FROM tinv_hdr_tmp h
        LEFT JOIN tcustomer c ON c.cus_kode = h.inv_cus_kode
        WHERE h.inv_nomor LIKE ? AND h.inv_tanggal BETWEEN ? AND ?
+         AND (? = '' OR h.user_create = ?)
        ORDER BY h.date_create DESC
        LIMIT ? OFFSET ?`,
-      [`${cabang}-%`, startDate, endDate, limit, offset],
+      [`${cabang}-%`, startDate, endDate, kasir, kasir, limit, offset],
     );
     res.status(200).json({
       success: true,
@@ -1002,6 +1004,7 @@ const getBazarSalesSummary = async (req, res) => {
   const weekAgo = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
   const startDate = req.query.startDate || fmt(weekAgo);
   const endDate = req.query.endDate || fmt(today);
+  const kasir = String(req.query.kasir || "").trim();
 
   try {
     const [[row]] = await pool.query(
@@ -1010,8 +1013,9 @@ const getBazarSalesSummary = async (req, res) => {
          IFNULL(SUM(d.invd_jumlah * (d.invd_harga - IFNULL(d.invd_diskon, 0))), 0) AS total_nominal
        FROM tinv_hdr_tmp h
        LEFT JOIN tinv_dtl_tmp d ON d.invd_inv_nomor = h.inv_nomor
-       WHERE h.inv_nomor LIKE ? AND h.inv_tanggal BETWEEN ? AND ?`,
-      [`${cabang}-%`, startDate, endDate],
+       WHERE h.inv_nomor LIKE ? AND h.inv_tanggal BETWEEN ? AND ?
+         AND (? = '' OR h.user_create = ?)`,
+      [`${cabang}-%`, startDate, endDate, kasir, kasir],
     );
 
     // Rincian metode bayar: query header saja (jangan di-join ke detail)
@@ -1022,8 +1026,9 @@ const getBazarSalesSummary = async (req, res) => {
          IFNULL(SUM(inv_rpcard), 0) AS transfer,
          IFNULL(SUM(inv_rpvoucher), 0) AS voucher
        FROM tinv_hdr_tmp
-       WHERE inv_nomor LIKE ? AND inv_tanggal BETWEEN ? AND ?`,
-      [`${cabang}-%`, startDate, endDate],
+       WHERE inv_nomor LIKE ? AND inv_tanggal BETWEEN ? AND ?
+         AND (? = '' OR user_create = ?)`,
+      [`${cabang}-%`, startDate, endDate, kasir, kasir],
     );
 
     res.status(200).json({
@@ -1469,11 +1474,14 @@ const tukarBarangBazar = async (req, res) => {
           );
         }
       } else {
+        // CASH: yang masuk ke kolom tunai adalah uang yang diterima (bayarTambahan),
+        // kembaliannya sudah dicatat terpisah di inv_kembali
+        const nominalKolom = metodeBayar === "CASH" ? bayarTambahan : selisih;
         await connection.query(
           `UPDATE tinv_hdr_tmp SET ${kolomBayar} = ${kolomBayar} + ?,
              inv_kembali = inv_kembali + ?
            WHERE inv_nomor = ?`,
-          [selisih, kembalianUntukPembayaranBaru, inv_nomor],
+          [nominalKolom, kembalianUntukPembayaranBaru, inv_nomor],
         );
       }
     } else if (selisih < 0) {
@@ -1538,6 +1546,31 @@ const tukarBarangBazar = async (req, res) => {
   }
 };
 
+// GET /bazar/history/kasir?startDate&endDate
+const getBazarHistoryKasir = async (req, res) => {
+  const cabang = req.user?.cabang;
+  if (!cabang) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Cabang tidak diketahui." });
+  }
+  const { startDate, endDate } = req.query;
+  try {
+    const [rows] = await pool.query(
+      `SELECT DISTINCT user_create AS kode
+       FROM tinv_hdr_tmp
+       WHERE inv_nomor LIKE ? AND inv_tanggal BETWEEN ? AND ?
+         AND user_create IS NOT NULL AND user_create <> ''
+       ORDER BY user_create`,
+      [`${cabang}-%`, startDate, endDate],
+    );
+    res.status(200).json({ success: true, data: rows.map((r) => r.kode) });
+  } catch (error) {
+    console.error("Error getBazarHistoryKasir:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat kasir." });
+  }
+};
+
 module.exports = {
   downloadMasterBazar,
   uploadKoreksiBazar,
@@ -1557,4 +1590,5 @@ module.exports = {
   getBazarProductImages,
   getBazarPromoDiscounts,
   tukarBarangBazar,
+  getBazarHistoryKasir,
 };
