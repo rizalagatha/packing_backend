@@ -549,6 +549,31 @@ const checkoutBazar = async (req, res) => {
     const voucher = Number(header.so_voucher) || 0;
     const kembali = Number(header.so_kembali) || 0;
 
+    // Validasi pembayaran terhadap total versi server
+    const totalServer = details.reduce(
+      (s, d, i) =>
+        s + Number(d.qty) * ((Number(d.harga) || 0) - unitDiskons[i]),
+      0,
+    );
+    if (card + voucher > totalServer + 0.5) {
+      return res.status(400).json({
+        success: false,
+        message: "Nominal kartu/voucher melebihi total belanja.",
+      });
+    }
+    if (cash + card + voucher - kembali < totalServer - 0.5) {
+      return res.status(400).json({
+        success: false,
+        message: "Pembayaran kurang dari total belanja.",
+      });
+    }
+    if (card > 0 && !String(header.so_bank_card || "").trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Rekening kartu/QRIS belum dipilih.",
+      });
+    }
+
     let invNosetor = "";
     let invJeniscard = "";
     if (card > 0) {
