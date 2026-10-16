@@ -248,9 +248,14 @@ const getItemsFromPacking = async (req, res) => {
   try {
     const { packNomor } = req.params;
 
-    // Ambil ringkasan qty per kode+ukuran dari kardus ini, plus SPK-nya
-    // (1 pack = 1 SPK, diambil dari staging tdc_stbj yang punya
-    // tsd_packing sama dengan nomor packing ini)
+    // Serial yang sudah ada di daftar scan app (dipisah koma)
+    const used = new Set(
+      String(req.query.exclude || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+
     const query = `
       SELECT
         d.packd_barcode AS barcode,
@@ -276,13 +281,6 @@ const getItemsFromPacking = async (req, res) => {
       });
     }
 
-    // Untuk tiap baris, coba pilih N unit_serial berstatus DI_DC (FIFO)
-    // yang match kode+ukuran+SPK. Kalau SPK tidak ketemu, atau unit yang
-    // tersedia kurang dari qty kardus — SISANYA DILOLOSKAN sebagai baris
-    // agregat legacy (unitSerial=null), bukan ditolak. Barang yang belum
-    // pernah ikut siklus produksi versi baru (belum ada baris di
-    // tbarangdc_unit sama sekali) akan selalu masuk jalur ini sepenuhnya.
-    // Sesuai §9 Opsi B: barcode lama tetap jalan penuh selama masa transisi.
     const resultUnits = [];
     for (const row of rows) {
       const qty = Number(row.qty) || 0;
@@ -290,18 +288,21 @@ const getItemsFromPacking = async (req, res) => {
 
       let units = [];
       if (row.spk) {
-        const [found] = await pool.query(
-          `SELECT unit_serial FROM tbarangdc_unit
-           WHERE unit_spk_nomor = ? AND unit_kode = ? AND unit_ukuran = ?
-             AND unit_status = 'DI_DC'
-           ORDER BY date_create ASC, unit_serial ASC
-           LIMIT ?`,
-          [row.spk, row.kode, row.ukuran, qty],
-        );
+        let sql = `SELECT unit_serial FROM tbarangdc_unit
+                   WHERE unit_spk_nomor = ? AND unit_kode = ? AND unit_ukuran = ?
+                     AND unit_status = 'DI_DC'`;
+        const params = [row.spk, row.kode, row.ukuran];
+        if (used.size > 0) {
+          sql += " AND unit_serial NOT IN (?)";
+          params.push([...used]);
+        }
+        sql += " ORDER BY date_create ASC, unit_serial ASC LIMIT ?";
+        params.push(qty);
+
+        const [found] = await pool.query(sql, params);
         units = found;
+        units.forEach((u) => used.add(u.unit_serial));
       }
-      // else: SPK tidak ditemukan (barang lama) — units tetap [], semua
-      // qty jatuh ke baris legacy di bawah.
 
       for (const u of units) {
         resultUnits.push({
