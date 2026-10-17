@@ -45,7 +45,7 @@ const savePackingList = async (req, res) => {
     // --- HANDLE HEADER ---
     if (isNew) {
       // Generate Nomor Baru
-      plNomor = await generateNewPlNumber("KDC", header.tanggal); // Default Gudang KDC
+      plNomor = await generateNewPlNumber(user.cabang, header.tanggal);
 
       const insertSql = `
         INSERT INTO tpacking_list_hdr 
