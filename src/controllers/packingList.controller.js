@@ -299,20 +299,16 @@ const findProductByBarcode = async (req, res) => {
         d.brgd_ukuran AS ukuran,
         d.brgd_barcode AS barcode,
         
-        -- Hitung Stok DC (KDC) Tersedia
         (IFNULL((
-           SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
-           FROM tmasterstok m 
-           WHERE m.mst_aktif='Y' 
-             AND m.mst_cab = ? 
-             AND m.mst_brg_kode=d.mtd_kode 
-             AND m.mst_ukuran=d.mtd_ukuran
+           SELECT SUM(m.mst_stok_in - m.mst_stok_out) FROM tmasterstok m 
+           WHERE m.mst_aktif='Y' AND m.mst_cab = ? 
+             AND m.mst_brg_kode=d.brgd_kode AND m.mst_ukuran=d.brgd_ukuran
         ), 0) - IFNULL((
            SELECT SUM(pld.pld_jumlah)
            FROM tpacking_list_dtl pld
            JOIN tpacking_list_hdr plh ON pld.pld_nomor = plh.pl_nomor
-           WHERE pld.pld_kode = d.mtd_kode 
-             AND pld.pld_ukuran = d.mtd_ukuran 
+           WHERE pld.pld_kode = d.brgd_kode 
+             AND pld.pld_ukuran = d.brgd_ukuran 
              AND plh.pl_status = 'O'
              AND plh.pl_nomor LIKE CONCAT(?, '.PL.%')
         ), 0)) AS stok
