@@ -198,16 +198,17 @@ const getPackingListDetail = async (req, res) => {
            SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
            FROM tmasterstok m 
            WHERE m.mst_aktif='Y' 
-             AND m.mst_cab='KDC' 
-             AND m.mst_brg_kode=d.mtd_kode 
-             AND m.mst_ukuran=d.mtd_ukuran
+             AND m.mst_cab = SUBSTRING_INDEX(d.pld_nomor, '.', 1)
+             AND m.mst_brg_kode=d.pld_kode 
+             AND m.mst_ukuran=d.pld_ukuran
         ), 0) - IFNULL((
-           SELECT SUM(pld.pld_jumlah)
-           FROM tpacking_list_dtl pld
-           JOIN tpacking_list_hdr plh ON pld.pld_nomor = plh.pl_nomor
-           WHERE pld.pld_kode = d.mtd_kode 
-             AND pld.pld_ukuran = d.mtd_ukuran 
+           SELECT SUM(p2.pld_jumlah)
+           FROM tpacking_list_dtl p2
+           JOIN tpacking_list_hdr plh ON p2.pld_nomor = plh.pl_nomor
+           WHERE p2.pld_kode = d.pld_kode 
+             AND p2.pld_ukuran = d.pld_ukuran 
              AND plh.pl_status = 'O'
+             AND plh.pl_nomor LIKE CONCAT(SUBSTRING_INDEX(d.pld_nomor, '.', 1), '.PL.%')
         ), 0)) AS stok
 
       FROM tpacking_list_dtl d
@@ -251,7 +252,7 @@ const loadItemsFromRequest = async (req, res) => {
            SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
            FROM tmasterstok m 
            WHERE m.mst_aktif='Y' 
-             AND m.mst_cab='KDC' 
+             AND m.mst_cab = ? 
              AND m.mst_brg_kode=d.mtd_kode 
              AND m.mst_ukuran=d.mtd_ukuran
         ), 0) - IFNULL((
@@ -261,6 +262,7 @@ const loadItemsFromRequest = async (req, res) => {
            WHERE pld.pld_kode = d.mtd_kode 
              AND pld.pld_ukuran = d.mtd_ukuran 
              AND plh.pl_status = 'O'
+             AND plh.pl_nomor LIKE CONCAT(?, '.PL.%')
         ), 0)) AS stok
 
       FROM tmintabarang_dtl d
@@ -270,7 +272,8 @@ const loadItemsFromRequest = async (req, res) => {
       ORDER BY d.mtd_kode, d.mtd_ukuran
     `;
 
-    const [rows] = await pool.query(query, [nomor]);
+    const cabang = req.user.cabang;
+    const [rows] = await pool.query(query, [cabang, cabang, nomor]);
 
     // Kembalikan array data ke frontend
     res.json(rows);
@@ -298,16 +301,20 @@ const findProductByBarcode = async (req, res) => {
         
         -- Hitung Stok DC (KDC) Tersedia
         (IFNULL((
-           SELECT SUM(m.mst_stok_in - m.mst_stok_out) FROM tmasterstok m 
-           WHERE m.mst_aktif='Y' AND m.mst_cab='KDC' 
-             AND m.mst_brg_kode=d.brgd_kode AND m.mst_ukuran=d.brgd_ukuran
+           SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
+           FROM tmasterstok m 
+           WHERE m.mst_aktif='Y' 
+             AND m.mst_cab = ? 
+             AND m.mst_brg_kode=d.mtd_kode 
+             AND m.mst_ukuran=d.mtd_ukuran
         ), 0) - IFNULL((
            SELECT SUM(pld.pld_jumlah)
            FROM tpacking_list_dtl pld
            JOIN tpacking_list_hdr plh ON pld.pld_nomor = plh.pl_nomor
-           WHERE pld.pld_kode = d.brgd_kode 
-             AND pld.pld_ukuran = d.brgd_ukuran 
+           WHERE pld.pld_kode = d.mtd_kode 
+             AND pld.pld_ukuran = d.mtd_ukuran 
              AND plh.pl_status = 'O'
+             AND plh.pl_nomor LIKE CONCAT(?, '.PL.%')
         ), 0)) AS stok
 
       FROM tbarangdc_dtl d
@@ -316,7 +323,8 @@ const findProductByBarcode = async (req, res) => {
         AND d.brgd_barcode = ?
     `;
 
-    const [rows] = await pool.query(query, [barcode]);
+    const cabang = req.user.cabang;
+    const [rows] = await pool.query(query, [cabang, cabang, barcode]);
 
     if (rows.length === 0) {
       return res.status(404).json({ message: "Barcode tidak ditemukan." });
