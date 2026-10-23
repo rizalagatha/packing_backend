@@ -522,9 +522,62 @@ const getActivePromos = async (req, res) => {
   }
 };
 
+// Promo SL1 yang daftar barangnya dihitung dinamis dari asal SJ.
+// Ganti nomor promo sesuai hasil pembuatan di web.
+const PROMO_ASAL_SL1 = {
+  "PRO-2026-016": "KBS", // diskon 25%
+  "PRO-2026-017": "KDC", // diskon 15%
+};
+
 const getPromoItems = async (req, res) => {
   try {
     const { nomor } = req.params;
+    const asal = PROMO_ASAL_SL1[nomor];
+
+    // Promo dinamis SL1: barang yang masuk ke SL1 lewat SJ dari cabang asal
+    if (asal) {
+      // KDC hanya untuk barang yang TIDAK pernah masuk dari KBS (25% didahulukan)
+      const exclKbs =
+        asal === "KDC"
+          ? `AND NOT EXISTS (
+               SELECT 1 FROM tmasterstok m2
+               JOIN tdc_sj_hdr sj2 ON sj2.sj_noterima = m2.mst_noreferensi
+               WHERE m2.mst_cab = 'SL1' AND m2.mst_aktif = 'Y'
+                 AND m2.mst_stok_in > 0 AND m2.mst_noreferensi LIKE '%.TJ.%'
+                 AND sj2.sj_cab = 'KBS'
+                 AND m2.mst_brg_kode = m.mst_brg_kode
+                 AND m2.mst_ukuran = m.mst_ukuran
+             )`
+          : "";
+
+      const [dyn] = await pool.query(
+        `SELECT DISTINCT
+           m.mst_brg_kode AS kode,
+           m.mst_ukuran   AS ukuran,
+           p.pro_dispersen AS discPersen,
+           0 AS discRp
+         FROM tmasterstok m
+         JOIN tdc_sj_hdr sj ON sj.sj_noterima = m.mst_noreferensi
+         JOIN tpromo p ON p.pro_nomor = ?
+         WHERE m.mst_cab = 'SL1' AND m.mst_aktif = 'Y'
+           AND m.mst_stok_in > 0 AND m.mst_noreferensi LIKE '%.TJ.%'
+           AND sj.sj_cab = ?
+           ${exclKbs}`,
+        [nomor, asal],
+      );
+
+      // Daftar kosong dianggap "berlaku untuk semua barang" oleh app,
+      // jadi kembalikan baris penanda supaya tidak bocor ke semua barang.
+      if (dyn.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: [{ kode: "__NONE__", ukuran: "-", discPersen: 0, discRp: 0 }],
+        });
+      }
+      return res.status(200).json({ success: true, data: dyn });
+    }
+
+    // Promo biasa: dari tpromo_barang
     const query = `
       SELECT 
         p.pb_brg_kode AS kode,
