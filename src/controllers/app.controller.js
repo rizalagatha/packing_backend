@@ -5,11 +5,11 @@ const getAppVersion = async (req, res) => {
   try {
     const appInfo = {
       latestVersion: packageJson.version, // Ambil otomatis dari package.json
-      versionCode: 86, // Update angka ini setiap rilis baru di backend
+      versionCode: 87, // Update angka ini setiap rilis baru di backend
       apkUrl: "http://103.94.238.252:3000/public/updates/app-release.apk",
       forceUpdate: false,
       // Ubah dari string tunggal menjadi Array
-      releaseNotes: ["Update untuk Store Sale dan Stok Opname"],
+      releaseNotes: ["Fix scan terima SJ"],
     };
     res.status(200).json({ success: true, data: appInfo });
   } catch (error) {
