@@ -29,6 +29,66 @@ const generateAuthNumber = async (cabang) => {
   return `${prefix}${sequence.toString().padStart(4, "0")}`;
 };
 
+// Tindak lanjut ACC/tolak mutasi kirim. Stok sudah terpotong saat simpan (trigger tmsk_dtl),
+// jadi ACC hanya membuka gerbang cetak/terima. Tolak = hapus dokumen (trigger before_delete
+// mengembalikan stok) dan unit serial dikembalikan ke toko pengirim.
+const prosesAccMutasiKirim = async (nomor, action, approver) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [hdr] = await connection.query(
+      "SELECT msk_cab, msk_status_acc FROM tmsk_hdr WHERE msk_nomor = ? FOR UPDATE",
+      [nomor],
+    );
+    // Dokumen sudah tidak ada atau sudah diproses: tidak ada yang dikerjakan
+    if (hdr.length === 0 || hdr[0].msk_status_acc !== "MENUNGGU") {
+      await connection.rollback();
+      return;
+    }
+
+    if (action === "APPROVE") {
+      await connection.query(
+        "UPDATE tmsk_hdr SET msk_status_acc = 'ACC' WHERE msk_nomor = ?",
+        [nomor],
+      );
+    } else {
+      const [serials] = await connection.query(
+        "SELECT mskd_unit_serial FROM tmsk_dtl WHERE mskd_nomor = ? AND mskd_unit_serial IS NOT NULL",
+        [nomor],
+      );
+      if (serials.length > 0) {
+        await connection.query(
+          `UPDATE tbarangdc_unit
+           SET unit_status = 'DI_TOKO', unit_lokasi_saat_ini = ?, date_modified = NOW(), user_modified = ?
+           WHERE unit_serial IN (?)`,
+          [hdr[0].msk_cab, approver, serials.map((r) => r.mskd_unit_serial)],
+        );
+      }
+      await connection.query("DELETE FROM tmsk_dtl WHERE mskd_nomor = ?", [
+        nomor,
+      ]);
+      await connection.query("DELETE FROM tmsk_hdr WHERE msk_nomor = ?", [
+        nomor,
+      ]);
+    }
+
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
+const prosesAccRefund = async (nomor, action) => {
+  await pool.query(
+    "UPDATE trefund_hdr SET rf_status_acc = ? WHERE rf_nomor = ? AND rf_status_acc = 'MENUNGGU'",
+    [action === "APPROVE" ? "ACC" : "DITOLAK", nomor],
+  );
+};
+
 // --- CONTROLLER FUNCTIONS ---
 
 // 1. [REQUESTER] Membuat permintaan otorisasi baru
@@ -53,10 +113,10 @@ const createRequest = async (req, res) => {
     const authNomor = await generateAuthNumber(cabangAsal);
 
     const query = `
-            INSERT INTO totorisasi 
-            (o_nomor, o_transaksi, o_jenis, o_ket, o_nominal, o_cab, o_status, o_requester, o_created, o_pin, o_barcode, o_target)
-            VALUES (?, ?, ?, ?, ?, ?, 'P', ?, NOW(), '-', ?, ?)
-        `;
+      INSERT INTO totorisasi 
+      (o_nomor, o_transaksi, o_jenis, o_ket, o_nominal, o_cab, o_status, o_requester, o_created, o_pin, o_barcode, o_target)
+      VALUES (?, ?, ?, ?, ?, ?, 'P', ?, NOW(), '-', ?, ?)
+    `;
 
     await pool.query(query, [
       authNomor,
@@ -231,6 +291,8 @@ const getPendingRequests = async (req, res) => {
       "CLOSE_SO_DTF",
       "CLOSE_SO",
       "CLOSE_PH",
+      "MUTASI_KIRIM",
+      "REFUND",
     ];
 
     if (user.cabang === "KDC") {
@@ -249,6 +311,8 @@ const getPendingRequests = async (req, res) => {
           "CLOSE_SO_DTF",
           "CLOSE_SO",
           "CLOSE_PH",
+          "MUTASI_KIRIM",
+          "REFUND",
         ]);
       } else if (userKodeUpper === "HARIS") {
         if (isEstuManagerPeriod) {
@@ -261,6 +325,8 @@ const getPendingRequests = async (req, res) => {
             "KLAIM_PETTYCASH",
             "SUBMIT_BAP",
             "TRANSFER_SOP",
+            "MUTASI_KIRIM",
+            "REFUND",
           ]);
         }
       } else if (userKodeUpper === "RIO") {
@@ -304,7 +370,7 @@ const processRequest = async (req, res) => {
 
   try {
     const [checkRows] = await pool.query(
-      "SELECT o_jenis FROM totorisasi WHERE o_nomor = ?",
+      "SELECT o_jenis, o_requester FROM totorisasi WHERE o_nomor = ?",
       [authNomor],
     );
     if (checkRows.length === 0) {
@@ -316,6 +382,26 @@ const processRequest = async (req, res) => {
     const o_jenis = checkRows[0].o_jenis;
     const userKodeUpper = String(user.kode).toUpperCase();
     const today = new Date();
+
+    const aturanApprover = {
+      MUTASI_KIRIM: ["DARUL", "ESTU"],
+      REFUND: ["ESTU"],
+    };
+    const approverSah = aturanApprover[o_jenis];
+    if (approverSah) {
+      if (!approverSah.includes(userKodeUpper)) {
+        return res.status(403).json({
+          success: false,
+          message: `Otorisasi ${o_jenis.replace(/_/g, " ")} hanya boleh dilakukan oleh ${approverSah.join(" atau ")}.`,
+        });
+      }
+      if (String(checkRows[0].o_requester).toUpperCase() === userKodeUpper) {
+        return res.status(403).json({
+          success: false,
+          message: "Tidak boleh meng-ACC permintaan sendiri.",
+        });
+      }
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     // [KUNCI EKSEKUSI]: Store dilarang keras memproses tipe manager / diskon_faktur!
@@ -330,6 +416,8 @@ const processRequest = async (req, res) => {
       "CLOSE_SO_DTF",
       "CLOSE_SO",
       "CLOSE_PH",
+      "MUTASI_KIRIM",
+      "REFUND",
     ];
     if (managerTypes.includes(o_jenis) && user.cabang !== "KDC") {
       return res.status(403).json({
@@ -351,28 +439,23 @@ const processRequest = async (req, res) => {
     }
 
     if (userKodeUpper === "ESTU") {
-      const isPeminjaman = o_jenis === "PEMINJAMAN_BARANG";
-      const isKlaimPettyCash = o_jenis === "KLAIM_PETTYCASH";
-      const isSubmitBap = o_jenis === "SUBMIT_BAP";
-      const isClosePenawaran = o_jenis === "CLOSE_PENAWARAN";
-      const isCloseSoDtf = o_jenis === "CLOSE_SO_DTF";
-      const isCloseSo = o_jenis === "CLOSE_SO";
-      const isClosePh = o_jenis === "CLOSE_PH";
+      const jenisEstu = [
+        "PEMINJAMAN_BARANG",
+        "KLAIM_PETTYCASH",
+        "SUBMIT_BAP",
+        "CLOSE_PENAWARAN",
+        "CLOSE_SO_DTF",
+        "CLOSE_SO",
+        "CLOSE_PH",
+        "MUTASI_KIRIM",
+        "REFUND",
+      ];
 
-      if (
-        !isPeminjaman &&
-        !isKlaimPettyCash &&
-        !isSubmitBap &&
-        !isClosePenawaran &&
-        !isCloseSoDtf &&
-        !isCloseSo &&
-        !isClosePh &&
-        !isEstuManagerPeriod
-      ) {
+      if (!jenisEstu.includes(o_jenis) && !isEstuManagerPeriod) {
         return res.status(403).json({
           success: false,
           message:
-            "Anda hanya berwenang untuk otorisasi Peminjaman Barang, Klaim Petty Cash, BAP, Close Penawaran, Close SO DTF, dan Close SO di luar periode 12-16 Jan.",
+            "Anda hanya berwenang untuk otorisasi Peminjaman Barang, Klaim Petty Cash, BAP, Close Penawaran, Close SO DTF, Close SO, dan Mutasi Kirim di luar periode 12-16 Jan.",
         });
       }
     }
@@ -442,6 +525,22 @@ const processRequest = async (req, res) => {
             `UPDATE tpettycash_hdr SET pc_status = 'REJECTED', pck_nomor = NULL, user_modified = ?, date_modified = NOW() WHERE pck_nomor = ?`,
             [approverName, o_transaksi],
           );
+        }
+      }
+      if ((o_jenis === "MUTASI_KIRIM" || o_jenis === "REFUND") && o_transaksi) {
+        try {
+          if (o_jenis === "MUTASI_KIRIM") {
+            await prosesAccMutasiKirim(o_transaksi, action, approverName);
+          } else {
+            await prosesAccRefund(o_transaksi, action);
+          }
+        } catch (hookError) {
+          console.error(`Error hook ${o_jenis}:`, hookError);
+          await pool.query(
+            "UPDATE totorisasi SET o_status = 'P' WHERE o_nomor = ?",
+            [authNomor],
+          );
+          throw hookError;
         }
       }
     }
