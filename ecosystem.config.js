@@ -25,6 +25,7 @@ module.exports = {
         DB_PORT: process.env.DB_PORT,
         JWT_SECRET: process.env.JWT_SECRET,
         WA_BAZAR_ADMINS: process.env.WA_BAZAR_ADMINS,
+        GEOFENCE_BYPASS_USERS: "TEST",
       },
     },
     {
@@ -50,6 +51,7 @@ module.exports = {
         DB_PORT: process.env.DB_PORT,
         JWT_SECRET: process.env.JWT_SECRET,
         WA_BAZAR_ADMINS: process.env.WA_BAZAR_ADMINS,
+        GEOFENCE_BYPASS_USERS: "TEST",
       },
     },
     {
@@ -74,6 +76,7 @@ module.exports = {
         DB_PORT: process.env.DB_PORT,
         JWT_SECRET: process.env.JWT_SECRET,
         WA_BAZAR_ADMINS: process.env.WA_BAZAR_ADMINS,
+        GEOFENCE_BYPASS_USERS: "TEST",
       },
     },
   ],

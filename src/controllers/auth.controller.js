@@ -24,6 +24,22 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return R * c; // Hasil dalam METER
 };
 
+// Bypass geofence khusus user tester (diisi lewat env, kosong di prod)
+const GEOFENCE_BYPASS_USERS = (process.env.GEOFENCE_BYPASS_USERS || "")
+  .split(",")
+  .map((s) => s.trim().toUpperCase())
+  .filter(Boolean);
+
+const isGeofenceBypassed = (userKode) => {
+  const hit = GEOFENCE_BYPASS_USERS.includes(
+    String(userKode || "").toUpperCase(),
+  );
+  if (hit) {
+    console.warn(`[GEOFENCE] bypass untuk user ${userKode}`);
+  }
+  return hit;
+};
+
 // Fungsi ini akan dipanggil oleh 'login' dan 'selectBranch'
 const generateFinalToken = (user, cabangNama) => {
   const payload = {
@@ -160,7 +176,12 @@ const login = async (req, res) => {
       // ==========================================
       // [GEOFENCING] Validasi Lokasi Jika Bukan DC
       // ==========================================
-      if (source === "mobile" && gudang && gudang.gdg_dc === 0) {
+      if (
+        source === "mobile" &&
+        gudang &&
+        gudang.gdg_dc === 0 &&
+        !isGeofenceBypassed(user_kode)
+      ) {
         if (!latitude || !longitude) {
           return res.status(403).json({
             success: false,
@@ -448,7 +469,7 @@ const loginWithDevice = async (req, res) => {
       const cabangNama = gudang ? gudang.gdg_nama : cabangKode;
 
       // Logika GPS
-      if (gudang && gudang.gdg_dc === 0) {
+      if (gudang && gudang.gdg_dc === 0 && !isGeofenceBypassed(user_kode)) {
         if (!latitude || !longitude) {
           return res.status(403).json({
             success: false,
@@ -519,7 +540,7 @@ const selectBranch = async (req, res) => {
     // ==========================================
     // [GEOFENCING] Validasi Lokasi Jika Bukan DC
     // ==========================================
-    if (gudang && gudang.gdg_dc === 0) {
+    if (gudang && gudang.gdg_dc === 0 && !isGeofenceBypassed(decoded.kode)) {
       if (!latitude || !longitude) {
         return res.status(403).json({
           success: false,
@@ -769,7 +790,7 @@ const loginWithDeviceNoBio = async (req, res) => {
       const gudang = gudangRows.length > 0 ? gudangRows[0] : null;
       const cabangNama = gudang ? gudang.gdg_nama : cabangKode;
 
-      if (gudang && gudang.gdg_dc === 0) {
+      if (gudang && gudang.gdg_dc === 0 && !isGeofenceBypassed(user_kode)) {
         if (!latitude || !longitude) {
           return res.status(403).json({
             success: false,
