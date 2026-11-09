@@ -238,6 +238,12 @@ const enrollDevice = async (req, res) => {
     const { user_kode, user_password, device_id, public_key, device_name } =
       req.body;
 
+    if (!public_key || typeof public_key !== "string") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Kunci perangkat tidak valid." });
+    }
+
     // 1. Verifikasi Password & Ambil Cabang User
     const [userRows] = await pool.query(
       "SELECT user_password, user_cab FROM tuser WHERE user_kode = ?",
@@ -288,11 +294,11 @@ const requestChallenge = async (req, res) => {
 
     // 1. Cek apakah perangkat sudah di-Approve
     const [deviceRows] = await pool.query(
-      "SELECT status FROM tuser_device WHERE device_id = ?",
+      "SELECT status, public_key FROM tuser_device WHERE device_id = ?",
       [device_id],
     );
 
-    if (deviceRows.length === 0) {
+    if (deviceRows.length === 0 || !deviceRows[0].public_key) {
       return res.status(404).json({
         success: false,
         needsEnrollment: true,
@@ -375,6 +381,14 @@ const loginWithDevice = async (req, res) => {
     }
 
     const rawKey = deviceRows[0].public_key;
+    if (!rawKey) {
+      return res.status(403).json({
+        success: false,
+        needsEnrollment: true,
+        message:
+          "Kunci perangkat tidak ditemukan. Daftarkan ulang perangkat ini.",
+      });
+    }
     const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${rawKey.match(/.{1,64}/g).join("\n")}\n-----END PUBLIC KEY-----`;
 
     // ==========================================
