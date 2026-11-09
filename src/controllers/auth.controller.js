@@ -294,15 +294,25 @@ const requestChallenge = async (req, res) => {
 
     // 1. Cek apakah perangkat sudah di-Approve
     const [deviceRows] = await pool.query(
-      "SELECT status, public_key FROM tuser_device WHERE device_id = ?",
+      "SELECT status, public_key, device_secret_hash FROM tuser_device WHERE device_id = ?",
       [device_id],
     );
 
-    if (deviceRows.length === 0 || !deviceRows[0].public_key) {
+    if (
+      deviceRows.length === 0 ||
+      (!deviceRows[0].public_key && !deviceRows[0].device_secret_hash)
+    ) {
       return res.status(404).json({
         success: false,
         needsEnrollment: true,
         message: "Perangkat belum terdaftar.",
+      });
+    }
+    if (!deviceRows[0].public_key) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Perangkat ini terdaftar tanpa biometrik. Daftarkan ulang perangkat untuk memakai biometrik.",
       });
     }
     if (deviceRows[0].status !== "APPROVED") {
