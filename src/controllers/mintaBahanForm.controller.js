@@ -1,6 +1,12 @@
 const pool = require("../config/database");
 const { format } = require("date-fns");
 
+// Cabang tempat stok fisik obat/aksesoris disimpan (bukan P03).
+const CABANG_STOK_DEFAULT = "P04";
+// Stok obat MMT. Nilai awal P04 belum terkonfirmasi: ganti jika stok MMT
+// ternyata di cabang lain (cek tmasterstok_obat).
+const CABANG_STOK_MMT = "P04";
+
 // --- HELPER: GENERATE NOMOR ---
 const generateNomor = async (connection, jenis, tanggal) => {
   const year = format(new Date(tanggal), "yyyy");
@@ -22,7 +28,6 @@ const generateNomor = async (connection, jenis, tanggal) => {
 const searchBarang = async (req, res) => {
   try {
     const { keyword, jenis } = req.query;
-    const cabangStok = "P04"; // Stok fisik aksesoris/obat ada di P04, BUKAN P03
 
     if (!jenis || !["ACCESORIES", "OBAT"].includes(jenis)) {
       return res.status(400).json({
@@ -40,7 +45,8 @@ const searchBarang = async (req, res) => {
       ktgFilter = `AND b.brg_ktg = 'STORE'`;
       stockTable = "kencanaprint.tmasterstok_acc";
     } else if (jenis === "OBAT") {
-      ktgFilter = `AND b.brg_ktg = 'DTF'`;
+      // DTF = obat Kaosan, MMT = obat MMT (master sama: tgarmen_brg)
+      ktgFilter = `AND b.brg_ktg IN ('DTF', 'MMT')`;
       stockTable = "kencanaprint.tmasterstok_obat";
     }
 
@@ -50,11 +56,12 @@ const searchBarang = async (req, res) => {
         b.brg_nama AS nama, 
         b.brg_satuan AS satuan, 
         b.brg_note AS note,
+        b.brg_ktg AS kategori,
         IFNULL((
           SELECT SUM(m.mst_stok_in - m.mst_stok_out) 
           FROM ${stockTable} m 
           WHERE m.mst_aktif = 'Y' 
-            AND m.mst_cab = ? 
+            AND m.mst_cab = IF(b.brg_ktg = 'MMT', ?, ?)
             AND m.mst_brg_kode = b.brg_kode
         ), 0) AS stok
       FROM kencanaprint.tgarmen_brg b
@@ -66,7 +73,8 @@ const searchBarang = async (req, res) => {
     `;
 
     const [rows] = await pool.query(query, [
-      cabangStok,
+      CABANG_STOK_MMT,
+      CABANG_STOK_DEFAULT,
       jenis,
       searchTerm,
       searchTerm,
