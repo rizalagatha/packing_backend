@@ -88,6 +88,14 @@ const prosesAccRefund = async (nomor, action) => {
     [action === "APPROVE" ? "ACC" : "DITOLAK", nomor],
   );
 };
+// ACC/tolak Proforma Invoice (Manager Retail). Isi dokumen tidak diubah di sini,
+// hanya membuka atau menutup gerbang cetak lewat inv_status_acc.
+const prosesAccProforma = async (nomor, action) => {
+  await pool.query(
+    "UPDATE tinv_hdr SET inv_status_acc = ? WHERE inv_nomor = ? AND inv_sts_pro = 2 AND inv_status_acc = 'MENUNGGU'",
+    [action === "APPROVE" ? "ACC" : "DITOLAK", nomor],
+  );
+};
 
 // --- CONTROLLER FUNCTIONS ---
 
@@ -293,6 +301,7 @@ const getPendingRequests = async (req, res) => {
       "CLOSE_PH",
       "MUTASI_KIRIM",
       "REFUND",
+      "PROFORMA",
     ];
 
     if (user.cabang === "KDC") {
@@ -333,7 +342,7 @@ const getPendingRequests = async (req, res) => {
         query += " AND o_jenis = 'TRANSFER_SOP'";
       } else {
         query +=
-          " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis NOT IN ('TRANSFER_SOP'))";
+          " AND (o_target IS NULL OR o_target = '' OR o_target = 'KDC' OR o_jenis NOT IN ('TRANSFER_SOP')) AND o_jenis <> 'PROFORMA'";
       }
     } else {
       query +=
@@ -386,6 +395,7 @@ const processRequest = async (req, res) => {
     const aturanApprover = {
       MUTASI_KIRIM: ["DARUL", "ESTU"],
       REFUND: ["ESTU"],
+      PROFORMA: ["HARIS"],
     };
     const approverSah = aturanApprover[o_jenis];
     if (approverSah) {
@@ -418,6 +428,7 @@ const processRequest = async (req, res) => {
       "CLOSE_PH",
       "MUTASI_KIRIM",
       "REFUND",
+      "PROFORMA",
     ];
     if (managerTypes.includes(o_jenis) && user.cabang !== "KDC") {
       return res.status(403).json({
@@ -527,12 +538,19 @@ const processRequest = async (req, res) => {
           );
         }
       }
-      if ((o_jenis === "MUTASI_KIRIM" || o_jenis === "REFUND") && o_transaksi) {
+      if (
+        (o_jenis === "MUTASI_KIRIM" ||
+          o_jenis === "REFUND" ||
+          o_jenis === "PROFORMA") &&
+        o_transaksi
+      ) {
         try {
           if (o_jenis === "MUTASI_KIRIM") {
             await prosesAccMutasiKirim(o_transaksi, action, approverName);
-          } else {
+          } else if (o_jenis === "REFUND") {
             await prosesAccRefund(o_transaksi, action);
+          } else {
+            await prosesAccProforma(o_transaksi, action);
           }
         } catch (hookError) {
           console.error(`Error hook ${o_jenis}:`, hookError);
