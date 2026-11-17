@@ -46,59 +46,36 @@ const findByBarcode = async (req, res) => {
       return res.status(200).json({ success: true, data: product });
     }
 
-    // 2. DEBUGGING: Lihat semua item di SPK ini
-    console.log("   🔍 Debug: Melihat semua item di SPK", spk_nomor);
-    const debugQuery = `
-      SELECT 
-        spk.spkd_nomor,
-        spk.spkd_kode,
-        spk.spkd_ukuran,
-        d.brgd_barcode
-      FROM kencanaprint.tspk_dc spk
-      LEFT JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode 
-                                AND d.brgd_ukuran = spk.spkd_ukuran
-      WHERE spk.spkd_nomor = ?
-      ORDER BY spk.spkd_kode, spk.spkd_ukuran;
-    `;
-    const [debugRows] = await pool.query(debugQuery, [spk_nomor]);
-    console.log("   📊 Isi SPK:", JSON.stringify(debugRows, null, 2));
-
-    // 3. VALIDASI: Cek apakah barcode ini ADA di SPK
-    console.log("   🔍 Validasi: Cari barcode di SPK...");
+    // 2. VALIDASI: barcode harus ada di SPK, atau kode BS yang berasal dari SPK ini
     const spkCheckQuery = `
-      SELECT 
-        spk.spkd_nomor,
-        spk.spkd_kode,
-        spk.spkd_ukuran,
-        d.brgd_barcode
+      SELECT spk.spkd_nomor
       FROM kencanaprint.tspk_dc spk
-      JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode 
+      JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode
                            AND d.brgd_ukuran = spk.spkd_ukuran
-      WHERE d.brgd_barcode = ? 
-        AND spk.spkd_nomor = ?;
+      WHERE d.brgd_barcode = ?
+        AND spk.spkd_nomor = ?
+
+      UNION ALL
+
+      SELECT k.bsk_spk_nomor AS spkd_nomor
+      FROM kencanaprint.tbarcode_bs_kode k
+      WHERE k.bsk_kode_bs = ?
+        AND k.bsk_spk_nomor = ?;
     `;
     const [spkCheckRows] = await pool.query(spkCheckQuery, [
       barcode,
       spk_nomor,
+      barcode,
+      spk_nomor,
     ]);
 
-    console.log("   📊 Hasil validasi:", JSON.stringify(spkCheckRows, null, 2));
-
     if (spkCheckRows.length > 0) {
-      // SUKSES: Barcode ada di dalam SPK yang benar
-      console.log("   ✅ Barcode valid untuk SPK ini");
       return res.status(200).json({ success: true, data: product });
     }
 
-    // 4. GAGAL: Barcode tidak ada di SPK ini
-    console.log("   ❌ Barcode TIDAK valid untuk SPK ini");
-
-    // Cari SPK lain yang punya barcode ini
+    // 3. GAGAL: cari SPK lain yang punya barcode ini
     const otherSpkQuery = `
-      SELECT 
-        spk.spkd_nomor,
-        spk.spkd_kode,
-        spk.spkd_ukuran
+      SELECT spk.spkd_nomor
       FROM kencanaprint.tspk_dc spk
       JOIN tbarangdc_dtl d ON d.brgd_kode = spk.spkd_kode 
                            AND d.brgd_ukuran = spk.spkd_ukuran
@@ -113,23 +90,18 @@ const findByBarcode = async (req, res) => {
 
     let errorMessage = `Barcode tidak ditemukan di dalam SPK ${spk_nomor}.`;
     if (otherSpkRows.length > 0) {
-      const otherSpk = otherSpkRows[0];
-      errorMessage = `Peringatan: Barang ini milik SPK yang berbeda (${otherSpk.spkd_nomor}).`;
-      console.log("   📋 Barcode milik SPK:", otherSpk.spkd_nomor);
-      console.log("   📦 Detail:", JSON.stringify(otherSpk, null, 2));
+      errorMessage = `Peringatan: Barang ini milik SPK yang berbeda (${otherSpkRows[0].spkd_nomor}).`;
     }
 
-    console.log("   🚫 Error:", errorMessage);
     return res.status(409).json({ success: false, message: errorMessage });
   } catch (error) {
-    console.error("❌ [Backend Error]:", error);
+    console.error("[findByBarcode] Error:", error);
     res.status(500).json({
       success: false,
       message: "Terjadi kesalahan pada server.",
     });
   }
 };
-
 module.exports = {
   findByBarcode,
 };
