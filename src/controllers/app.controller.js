@@ -5,8 +5,8 @@ const getAppVersion = async (req, res) => {
   try {
     const appInfo = {
       latestVersion: packageJson.version, // Ambil otomatis dari package.json
-      versionCode: 89, // Update angka ini setiap rilis baru di backend
-      apkUrl: "http://103.94.238.252:3000/public/updates/app-release.apk",
+      versionCode: 90, // Update angka ini setiap rilis baru di backend
+      apkUrl: "https://lbl.manksi.com/public/updates/app-release.apk",
       forceUpdate: false,
       // Ubah dari string tunggal menjadi Array
       releaseNotes: ["Fix scan terima SJ"],
