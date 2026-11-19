@@ -32,6 +32,16 @@ const loadStbjData = async (req, res) => {
           (SELECT packd_brg_kaosan FROM tpacking_dtl pd WHERE pd.packd_pack_nomor = d.stbjd_packing AND pd.size = d.stbjd_size LIMIT 1)
         ) AS nama,
         COALESCE(
+          (SELECT pd.packd_barcode
+             FROM tpacking_dtl pd
+            WHERE pd.packd_pack_nomor = d.stbjd_packing
+              AND pd.size = d.stbjd_size
+              AND EXISTS (
+                SELECT 1 FROM kencanaprint.tbarcode_bs_kode k
+                 WHERE k.bsk_kode_bs = pd.packd_barcode
+              )
+            ORDER BY pd.packd_barcode
+            LIMIT 1),
           dtl.brgd_barcode,
           (SELECT packd_barcode FROM tpacking_dtl pd WHERE pd.packd_pack_nomor = d.stbjd_packing AND pd.size = d.stbjd_size LIMIT 1)
         ) AS barcode
